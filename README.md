@@ -5,6 +5,12 @@ This workflow was moved from `xtrack/examples/fccee_tuning` at xtrack commit
 `46b620d2d` on branch `fccee-phase-advance-investigation`. Development continues
 in this repository; `design.md` records the correction decisions and validation.
 
+The response-matrix formulas and quadrupole integration are documented in
+`doc/response_matrices.tex`. Run `make -C doc` to build
+`doc/response_matrices.pdf` (requires `latexmk` and `pdflatex`). The PDF is
+tracked in Git. Run `make -C doc clean` to remove auxiliary files while keeping
+the PDF.
+
 Use the existing editable Xsuite installation, including the xtrack changes on
 that branch. The analysis scripts also use Matplotlib; the optional amplitude
 detuning diagnostic uses `nafflib`. The tests require `pytest` and `pytest-mock`.

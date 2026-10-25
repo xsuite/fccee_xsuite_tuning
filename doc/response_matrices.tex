@@ -1,0 +1,485 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,booktabs}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\DeclareMathOperator{\sgn}{sgn}
+\DeclareMathOperator{\atanTwo}{atan2}
+\DeclareMathOperator{\diag}{diag}
+
+\title{Response matrices for the FCC-ee correction workflow}
+\author{FCC-ee Xsuite tuning}
+\date{25 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note describes the response matrices implemented in this repository:
+closed orbit, normal optics and horizontal dispersion, coupling and vertical
+dispersion, tunes, and first- and second-order chromaticities. Equations use
+the same signs, coordinates, and knob units as the code. Analytical responses
+are local, uncoupled-optics approximations; numerical family responses are
+obtained from Twiss probes. The appendices explain the four-point
+Gauss--Legendre integration and the propagation of optics inside a quadrupole.
+\end{abstract}
+
+\tableofcontents
+
+\section{Reference machine and matrix convention}
+
+\code{prepare_reference} in \code{correction_workflow.py} prepares a common
+reference with errors off, correction trims zero, and nominal nonlinear
+strengths (\code{on_nonlinear=1}). It computes periodic 4D Twiss at
+\code{delta0=0} with chromatic quantities enabled. Correction is performed
+without radiation or tapering. All response builders use this clean reference;
+the resulting matrices remain fixed during correction, while residuals are
+evaluated on the current machine.
+
+Let $\boldsymbol{u}$ be the physical correction knobs, $F_a$ an observable,
+and $T_a$ its target. The stored matrix is
+\begin{equation}
+ r_a(\boldsymbol{u})=F_a(\boldsymbol{u})-T_a,\qquad
+ R_{aj}=\left.\frac{\partial r_a}{\partial u_j}\right|_{\rm ref},\qquad
+ \boldsymbol{r}(\boldsymbol{u}+\Delta\boldsymbol{u})
+ \simeq\boldsymbol{r}(\boldsymbol{u})+R\Delta\boldsymbol{u}.
+ \label{eq:definition}
+\end{equation}
+Targets are independent of the correction knobs. Orbit targets are live BPM
+offset expressions: they change with the error ramp, but not with an orbit
+trim at a fixed ramp setting. Thus the stored responses are derivatives of
+the observables themselves.
+
+Rows and columns follow the optimizer's target and vary lists. The matrix
+contains neither target weights nor knob scales. If $W$ contains the target
+weights and $S$ the \code{Vary.weight} scales, the solver uses
+\begin{equation}
+ A=WRS,\qquad
+ \Delta\boldsymbol{u}=-S A^+ W\boldsymbol{r}.
+ \label{eq:solve}
+\end{equation}
+Here $A^+$ is the SVD pseudoinverse with the configured singular-value cutoff;
+only active rows and columns enter the solve. Step scaling and limits may
+shorten the resulting change. The workflow evaluates the changed machine
+and checks its correction goals separately.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Module & Observables & Response construction \\
+\midrule
+Orbit ($x$, $y$) & $x$, $y$ at BPMs & Closed-orbit Green function \\
+Optics & $\beta_{x,y},\alpha_{x,y},D_x,Q_{x,y}$ & Thick-quadrupole integrals \\
+Coupling & $\Re f,\Im f,D_y$ & Skew-coil midpoint model \\
+Tune & $Q_x,Q_y$ & Forward Twiss probes \\
+Chromaticity & $Q'_x,Q'_y$ & Central Twiss probes \\
+Second order & $Q''_x,Q''_y$ & Central Twiss probes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Throughout, $p\in\{x,y\}$ denotes a transverse plane,
+$\sigma_x=+1$, $\sigma_y=-1$, and $Q_p$ is its tune. The phase $\mu_p(s)$
+is measured in \emph{turns}, as in Twiss, so its radian value is $2\pi\mu_p$.
+All optics functions in the following kernels are reference quantities.
+The longitudinal coordinate is $s$; $\delta$ is the relative momentum deviation.
+
+\section{Closed-orbit response}
+
+For observation $s_i$ and a positive kick $\theta_{pj}$ at $s_j$, the periodic
+uncoupled Green function is
+\begin{equation}
+ G_p(s_i,s_j)=
+ \frac{\sqrt{\beta_p(s_i)\beta_p(s_j)}}{2\sin(\pi Q_p)}
+ \cos\!\left[2\pi|\mu_p(s_i)-\mu_p(s_j)|-\pi Q_p\right].
+ \label{eq:green}
+\end{equation}
+\code{orbit_response} returns $R_{ij}=G_p(s_i,s_j)$, with rows at BPMs and
+columns at correctors. Knobs represent kicks in radians. Their installation
+uses $\Delta\code{knl[0]}=-\theta_x$ and
+$\Delta\code{ksl[0]}=+\theta_y$, so a positive knob produces a positive
+canonical transverse momentum kick in either plane.
+
+The matching residual is $x_i-d_{x,i}$ or $y_i-d_{y,i}$, where $d_{p,i}$ is
+the live BPM offset. The stored matrix is in the laboratory frame and has no
+cross-plane blocks. The orbit acceptance diagnostic additionally rotates the
+offset-subtracted coordinates by the BPM roll; that diagnostic rotation is
+not included in the analytical matrix.
+
+\section{Normal-quadrupole response}
+\label{sec:normal}
+
+\subsection{Distributed strength and kernels}
+
+For quadrupole $j$ of length $L_j$, let $u_j=\Delta k_{1j}$ be a uniform
+normal-gradient trim in $\mathrm{m}^{-2}$. A small slice $\dd\ell$ produces
+the focusing perturbation $\sigma_p u_j\dd\ell$. Write its location as
+$t_j(\ell)=s_j+\ell$ and define
+\begin{equation}
+ d_p(i,t)=\mu_p(s_i)-\mu_p(t),\qquad
+ \Phi_p(i,t)=4\pi|d_p(i,t)|-2\pi Q_p.
+\end{equation}
+The implementation in \code{normal_quadrupole_response} integrates the
+following kernels along each magnet:
+\begin{align}
+ \frac{\partial\beta_p(s_i)}{\partial k_{1j}}
+ &= -\frac{\sigma_p\beta_p(s_i)}{2\sin(2\pi Q_p)}
+ \int_0^{L_j}\beta_p(t_j(\ell))
+       \cos\Phi_p(i,t_j(\ell))\,\dd\ell,
+ \label{eq:beta}\\
+ \frac{\partial\alpha_p(s_i)}{\partial k_{1j}}
+ &= -\frac{\sigma_p}{2\sin(2\pi Q_p)}
+ \int_0^{L_j}\beta_p(t_j(\ell))
+ \Big[\sgn d_p(i,t_j(\ell))\sin\Phi_p(i,t_j(\ell))
+ \nonumber\\[-2pt]
+ &\hspace{46mm}+\alpha_p(s_i)\cos\Phi_p(i,t_j(\ell))\Big],\dd\ell,
+ \label{eq:alpha}\\
+ \frac{\partial Q_p}{\partial k_{1j}}
+ &=\frac{\sigma_p}{4\pi}\int_0^{L_j}\beta_p(t_j(\ell))\,\dd\ell.
+ \label{eq:tuneanalytic}
+\end{align}
+In particular, the beta and alpha rows are derivatives of the \emph{ordinary}
+Twiss functions, not of logarithms or normalized-alpha combinations. The
+cosine term proportional to $\alpha_p(s_i)$ in Eq.~\eqref{eq:alpha} is needed
+for the ordinary-alpha response. Relative-beta weighting is applied later:
+a target weight proportional to $1/\beta_{p,\rm ref}(s_i)$ makes its weighted
+residual proportional to $\beta_p/\beta_{p,\rm ref}-1$.
+
+A normal trim gives a horizontal momentum kick
+$\Delta p_x=-u_j x\dd\ell$. On the clean reference orbit, the corresponding
+dispersion source is $-u_jD_x(t)\dd\ell$, giving
+\begin{equation}
+ \frac{\partial D_x(s_i)}{\partial k_{1j}}
+ =-\int_0^{L_j}G_x(s_i,t_j(\ell))D_x(t_j(\ell))\,\dd\ell.
+ \label{eq:dx}
+\end{equation}
+These are linearized, uncoupled, on-momentum response formulas. They do not
+include a coupled-optics or nonlinear feed-down response of the dirty machine.
+The integrals are evaluated using the same four internal sample points for
+beta, alpha, tune, and dispersion (Appendices~\ref{app:gauss} and
+\ref{app:transport}).
+
+\subsection{From magnet derivatives to actual knobs}
+
+The low-level matrix $B_{aj}=\partial F_a/\partial k_{1j}$ has columns for
+individual thick quadrupoles. Its rows are grouped by quantity:
+$\beta_x$, $\beta_y$, $\alpha_x$, $\alpha_y$, $D_x$, $Q_x$, $Q_y$.
+Beta, alpha, and dispersion can have different observation lists.
+
+\code{build_normal_quad_optics_response_matrix} in \code{corr_optics.py}
+finds the quadrupoles controlled by each independent knob through xdeps.
+Let $K_{1j}$ be the magnet's total integrated normal strength, obtained from
+\code{get_total_knl_ksl()[0][1]}. For knob $u_b$ and its configured probe step
+$h_b$, the strength slope is measured without running Twiss:
+\begin{equation}
+ C_{jb}\simeq\frac{K_{1j}(u_b+h_b)-K_{1j}(u_b-h_b)}{2h_b},\qquad
+ R_{ab}=\sum_j\frac{B_{aj}}{L_j}C_{jb}.
+ \label{eq:chain}
+\end{equation}
+Each knob is restored after the probes, also on failure. The factor $1/L_j$
+converts a distributed-gradient response into an integrated-strength response.
+This handles knobs shared by several quadrupoles, derived family expressions,
+and contributions to the total strength beyond the main \code{k1} field.
+Integrated changes are modeled as distributed uniformly over each magnet.
+The supported magnets are unsliced thick quadrupoles with fixed positive
+lengths. The matrix is reordered into the actual target list before use.
+
+The standard optics optimizer has five rows per observation,
+$(\beta_x,\beta_y,\alpha_x,\alpha_y,D_x)$, followed by $Q_x,Q_y$.
+The low-level helper also returns
+\begin{equation}
+ s_j^{\rm quad}=
+ \left[\max\!\left(\int_0^{L_j}\beta_x(t_j(\ell))\dd\ell,
+                   \int_0^{L_j}\beta_y(t_j(\ell))\dd\ell\right)\right]^{-1}.
+\end{equation}
+These auxiliary scales are currently discarded by \code{corr_optics.py};
+its standard optics varies use unit weights.
+
+\section{Skew-quadrupole response: coupling and vertical dispersion}
+
+\subsection{Physical groups and midpoint optics}
+
+Each coupling knob $u_g$ is an integrated skew-quadrupole strength in
+$\mathrm{m}^{-1}$, installed on one physical sextupole. If the magnet has
+several pieces with lengths $L_m$, the added skew strength is
+\begin{equation}
+ \Delta\code{ksl[1]}_m=u_g\frac{L_m}{L_g},\qquad L_g=\sum_{m\in g}L_m.
+\end{equation}
+The analytical model replaces the distributed coil by one kick at the physical
+magnet midpoint $s_g=s_{g,0}+L_g/2$. It uses the entrance of the first piece and
+the total length, assuming the pieces describe one contiguous magnet.
+For $\ell_g=L_g/2$, midpoint optics are approximated by drift transport:
+\begin{align}
+ \beta_{p,g}&=\beta_{p,0}-2\alpha_{p,0}\ell_g+
+                 \frac{1+\alpha_{p,0}^2}{\beta_{p,0}}\ell_g^2,\\
+ \mu_{p,g}&=\mu_{p,0}+
+   \frac{1}{2\pi}\atanTwo(\ell_g,\beta_{p,0}-\alpha_{p,0}\ell_g),\\
+ D_{x,g}&=D_{x,0}+\ell_g D_{p_x,0}.
+\end{align}
+Here $D_{p_x}$ denotes \code{dpx}. This is a clean-orbit, straight-sextupole
+approximation; unlike the normal-quadrupole response, it uses no Gauss points.
+
+\subsection{Resonance-driving terms}
+
+For an observation $s_i$, define the forward phase from source to observation
+with the ring wrap chosen by longitudinal ordering:
+\begin{equation}
+ \Delta\mu_p(i,g)=\mu_p(s_i)-\mu_{p,g}
+                  +Q_p\,\mathbf{1}_{s_g>s_i}.
+\end{equation}
+The complex coupling derivatives implemented in \code{skew_quadrupole_response}
+are
+\begin{align}
+ \frac{\partial f_{1001}(s_i)}{\partial u_g}
+ &=\frac{\sqrt{\beta_{x,g}\beta_{y,g}}
+    e^{2\pi\ii[\Delta\mu_x(i,g)-\Delta\mu_y(i,g)]}}
+          {4[1-e^{2\pi\ii(Q_x-Q_y)}]},\\
+ \frac{\partial f_{1010}(s_i)}{\partial u_g}
+ &=\frac{\sqrt{\beta_{x,g}\beta_{y,g}}
+    e^{2\pi\ii[\Delta\mu_x(i,g)+\Delta\mu_y(i,g)]}}
+          {4[1-e^{2\pi\ii(Q_x+Q_y)}]}.
+ \label{eq:rdt}
+\end{align}
+Their real and imaginary parts form four real response blocks. These signs
+and phases follow the code's positive \code{ksl[1]} and Twiss RDT conventions.
+
+A positive integrated skew trim produces $\Delta p_y=u_g x$, so its vertical
+dispersion response is
+\begin{equation}
+ \frac{\partial D_y(s_i)}{\partial u_g}
+ =\frac{\sqrt{\beta_y(s_i)\beta_{y,g}}}
+             {2\sin(\pi Q_y)}
+   \cos[2\pi\Delta\mu_y(i,g)-\pi Q_y]\,D_{x,g}.
+\end{equation}
+The helper initially groups rows by quantity; \code{corr_coupling.py} reorders
+them into five rows per observation:
+$(\Re f_{1001},\Im f_{1001},\Re f_{1010},\Im f_{1010},D_y)$.
+Targets are the corresponding reference values. Column scales are
+$s_g^{\rm skew}=1/\sqrt{\beta_{x,g}\beta_{y,g}}$ and are supplied through
+\code{Vary.weight}, rather than multiplied into the stored matrix.
+
+During construction the code checks one distributed probe,
+$u_g=10^{-5}s_g^{\rm skew}\sin(g+0.3)$ with zero-based group index $g$.
+It compares the Twiss change with $R\boldsymbol{u}$, both for the full vector
+and for its $D_y$ block, and rejects relative norm discrepancies above $5\%$.
+The clean zero trims are restored afterwards. This directional check tests
+the combined response, not every column independently.
+
+\section{Numerical family responses}
+
+These matrices are computed by perturbing family trims and evaluating Twiss
+on the clean machine. All dependent magnets follow their existing expressions.
+Probes use the reference closed-orbit particle as \code{co_guess} and the
+shared transfer-matrix and chromatic-step settings. Knobs are restored after
+each probe sequence, including when an evaluation fails.
+
+\subsection{Tunes}
+
+The two tune trims are additive offsets to \code{kqf2} and \code{kqd1},
+in $\mathrm{m}^{-2}$. Unlike the analytical tune rows in the optics matrix,
+\code{build_tune_response} measures their full family response with a forward
+probe of $h=10^{-7}\,\mathrm{m}^{-2}$:
+\begin{equation}
+ R^{Q}_{pb}=\frac{Q_p(\boldsymbol{u}_0+h\boldsymbol{e}_b)
+                       -Q_{p,\rm ref}}{h}.
+\end{equation}
+This is a $2\times2$ matrix, evaluated with \code{chrom=False}.
+
+\subsection{First-order chromaticity}
+
+Define $Q'_p=\dd Q_p/\dd\delta$, returned as \code{dqx} and \code{dqy}.
+Four additive sextupole-family offsets control \code{ksf1}, \code{ksf2},
+\code{ksd1}, and \code{ksd2}, in $\mathrm{m}^{-3}$.
+\code{build_chromaticity_response} returns the $2\times4$ matrix
+\begin{equation}
+ R^{Q'}_{pb}=\frac{Q'_p(\boldsymbol{u}_0+h\boldsymbol{e}_b)
+                       -Q'_p(\boldsymbol{u}_0-h\boldsymbol{e}_b)}{2h},
+ \qquad h=10^{-4}\,\mathrm{m}^{-3}\quad\text{by default}.
+\end{equation}
+Each probe uses \code{chrom=True}; the targets are the shared reference
+chromaticities at nominal nonlinear strengths.
+
+\subsection{Second-order chromaticity}
+
+The two knobs \code{dko_arc_f} and \code{dko_arc_d} represent $k_3$ offsets
+in $\mathrm{m}^{-4}$. They act on the quadrupoles controlled by the two arc
+quadrupole families. For each affected element the installer adds
+$\Delta\code{knl[3]}=u_b L_j$ (with its correction switch), preserving the
+existing multipole expression. The $2\times2$ response is
+\begin{equation}
+ R^{Q''}_{pb}=\frac{Q''_p(\boldsymbol{u}_0+h\boldsymbol{e}_b)
+                        -Q''_p(\boldsymbol{u}_0-h\boldsymbol{e}_b)}{2h},
+ \qquad h=0.01\,\mathrm{m}^{-4}\quad\text{by default}.
+\end{equation}
+Twiss returns $Q''_p$ as \code{ddqx} and \code{ddqy}. The reported quadratic
+coefficient is instead $Q''_p/2$, since
+\begin{equation}
+ Q_p(\delta)=Q_p(0)+Q'_p\delta+\tfrac12 Q''_p\delta^2+\cdots.
+\end{equation}
+The optimizer stores derivatives and targets of $Q''$ without dividing by two.
+Consequently a tolerance of one on $Q''/2$ corresponds to a target tolerance
+of two on \code{ddqx} or \code{ddqy}.
+
+For both chromatic responses, the Twiss momentum step is
+\code{delta_chrom=2e-4}. This momentum step is distinct from the family-knob
+probe $h$. It is shared by reference and probe calculations; the earlier
+$10^{-6}$ momentum step gave unreliable second derivatives in this workflow.
+Both chromatic corrections are used in refinement, after the error ramp,
+with first-order correction preceding second-order correction.
+
+\section{Implementation map and scope}
+
+The analytical kernels are in \code{response_builders.py}. Assembly and
+target ordering are in \code{corr_orbit.py}, \code{corr_optics.py}, and
+\code{corr_coupling.py}. The numerical derivatives are in \code{corr_tune.py},
+\code{corr_chromaticity.py}, and \code{corr_second_order_chrom.py}.
+
+The unweighted matrices are installed with \code{set_response} by
+\code{CorrectionOptimizer}. Evaluations and the correction sequence belong
+to \code{FCCeeCorrection}.
+
+The analytical formulas describe a stable periodic reference away from their
+resonant denominators. They are not exact responses of a strongly coupled,
+misaligned, nonlinear, radiating machine. Finite-difference Twiss tests in
+\code{tests/test_fccee_optics_response.py} check normal-optics responses,
+including compound knobs and distinct beta/alpha locations. The coupling
+directional check provides an additional runtime consistency test. Four-point
+quadrature improves the longitudinal integration of the chosen model; it
+does not remove that model's approximations. Neither response validation nor
+correction convergence establishes dynamic or momentum acceptance.
+
+\appendix
+\section{Four-point Gauss--Legendre integration}
+\label{app:gauss}
+
+For each quadrupole integral, the code calls
+\code{numpy.polynomial.legendre.leggauss(4)}. The returned nodes $\xi_n$ are
+the roots of the fourth Legendre polynomial on $[-1,1]$, and $w_n$ are its
+quadrature weights:
+\begin{center}
+\begin{tabular}{rr}
+\toprule
+Node $\xi_n$ & Weight $w_n$ \\
+\midrule
+$-0.861136311594053$ & $0.347854845137454$ \\
+$-0.339981043584856$ & $0.652145154862546$ \\
+$+0.339981043584856$ & $0.652145154862546$ \\
+$+0.861136311594053$ & $0.347854845137454$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+For a magnet of length $L_j$, map these dimensionless nodes and weights to
+physical distances and integration lengths:
+\begin{equation}
+ \ell_{jn}=\frac{L_j}{2}(1+\xi_n),\qquad
+ W_{jn}=\frac{L_j}{2}w_n,\qquad
+ \int_0^{L_j} f(\ell)\,\dd\ell
+ \simeq\sum_{n=1}^4 W_{jn}f(\ell_{jn}).
+ \label{eq:gauss}
+\end{equation}
+Thus $\sum_nW_{jn}=L_j$, and $W_{jn}$ has units of metres. The rule is exact
+for polynomials through degree seven. Our kernels contain transported optics
+and trigonometric phase factors, so their integration is still approximate.
+No adaptive subdivision or quadrature error estimate is currently performed.
+
+For example, Eq.~\eqref{eq:beta} becomes
+\begin{equation}
+ B_{\beta_p(i),j}\simeq
+ -\frac{\sigma_p\beta_p(s_i)}{2\sin(2\pi Q_p)}
+ \sum_{n=1}^4 W_{jn}\beta_p(t_j(\ell_{jn}))
+       \cos\Phi_p(i,t_j(\ell_{jn})).
+\end{equation}
+The same nodes enter the other normal-quadrupole kernels. One evaluates the
+\emph{whole response integrand} at each point; averaging beta and phase first
+would not give the same result. In particular, beta and phase vary inside a
+strong quadrupole, so one point or an entrance/exit average can miss that
+variation. Gauss integration retains four samples while avoiding extra Twiss
+calculations: local optics are obtained by the transport below.
+
+\section{Optics propagation inside a quadrupole}
+\label{app:transport}
+
+\subsection{Constant-gradient transfer matrix}
+
+Let $P=1+\delta_j$ at the quadrupole entrance and
+$K_p=\sigma_p k_{1j}/P$. Within the model, $k_{1j}$ and $P$ are constant.
+Define
+\begin{align}
+ C(\ell)&=
+ \begin{cases}
+ \cos(\sqrt{K_p}\ell), & K_p>0,\\
+ 1, & K_p=0,\\
+ \cosh(\sqrt{-K_p}\ell), & K_p<0,
+ \end{cases}\\
+ S(\ell)&=
+ \begin{cases}
+ \sin(\sqrt{K_p}\ell)/\sqrt{K_p}, & K_p>0,\\
+ \ell, & K_p=0,\\
+ \sinh(\sqrt{-K_p}\ell)/\sqrt{-K_p}, & K_p<0.
+ \end{cases}
+\end{align}
+In canonical transverse coordinates $(q,p_q)$, the matrix is
+\begin{equation}
+ M_p(\ell)=
+ \begin{pmatrix} a&b\\c&d\end{pmatrix}
+ =\begin{pmatrix} C&S/P\\-P K_p S&C\end{pmatrix}.
+\end{equation}
+Its determinant is one. In the zero-gradient limit,
+$a=d=1$, $b=\ell/P$, $c=0$, giving a drift. In the nominal on-momentum
+reference $P=1$; the helper nevertheless retains the entrance momentum
+factor in its local transport. This transport alone does not make the response
+kernels general off-momentum formulas.
+
+\subsection{Beta, alpha, phase, and dispersion}
+
+With entrance values $\beta_0,\alpha_0$ and
+$\gamma_0=(1+\alpha_0^2)/\beta_0$, covariance transport gives
+\begin{align}
+ \beta(\ell)&=a^2\beta_0-2ab\alpha_0+b^2\gamma_0,\\
+ \alpha(\ell)&=-ac\beta_0+(ad+bc)\alpha_0-bd\gamma_0,\\
+ \gamma(\ell)&=c^2\beta_0-2cd\alpha_0+d^2\gamma_0.
+\end{align}
+The helper only needs $\beta(\ell)$; local alpha is not an input to the
+response kernels. The $\alpha(s_i)$ in Eq.~\eqref{eq:alpha} is the value
+at the observation point, read directly from the reference table.
+
+The phase increment follows from
+\begin{equation}
+ \sin\Delta\psi=\frac{b}{\sqrt{\beta_0\beta(\ell)}},\qquad
+ \cos\Delta\psi=\frac{a\beta_0-b\alpha_0}
+                         {\sqrt{\beta_0\beta(\ell)}}.
+\end{equation}
+Accordingly, the code uses
+\begin{equation}
+ \mu(\ell)=\mu_0+
+ \frac{\atanTwo(b,a\beta_0-b\alpha_0)}{2\pi}.
+\end{equation}
+The two-argument arctangent retains the quadrant. The implementation uses
+its principal branch without further unwrapping, assuming the modest phase
+advance of an individual lattice quadrupole; it is not a general transport
+routine for arbitrarily large internal phase advances.
+
+For a straight quadrupole in this clean, uncoupled model, the dispersion is
+transported homogeneously:
+\begin{equation}
+ \begin{pmatrix}D(\ell)\\D_p(\ell)\end{pmatrix}
+ =M_p(\ell)\begin{pmatrix}D_0\\D_{p,0}\end{pmatrix},\qquad
+ D(\ell)=aD_0+bD_{p,0}.
+\end{equation}
+$D_p$ is the derivative of canonical momentum with respect to $\delta$
+(\code{dpx} or \code{dpy}), not an independently assumed slope coordinate.
+There is no bending source inside this transport model. Only $D(\ell)$ is
+needed at the integration samples.
+
+The code vectorizes these calculations over all quadrupoles and four samples,
+returning arrays of shape $(N_{\rm quad},4)$ for beta, phase, integration
+weight, and dispersion. It uses the main \code{k1} field for this internal
+transport. The separate knob-to-strength mapping in Eq.~\eqref{eq:chain}
+accounts for changes in total integrated normal strength.
+
+\end{document}
