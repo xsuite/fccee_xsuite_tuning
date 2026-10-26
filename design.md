@@ -679,9 +679,10 @@ The workflow still owns the common reference and observation policy, precomputes
 response SVDs, and controls candidate evaluations, acceptance and rollback.
 
 Each optimizer sets `rcond` from its module settings (zero for tunes).
-`run_lstsq`, `step`, `solve`, and `run_jacobian` use this default
-when no per-call value is supplied. Explicit per-call values, including zero,
-override it without changing the default or rebuilding the response SVD.
+`run_lstsq`, `step`, and `solve` use this default when no per-call value is
+supplied. Explicit per-call values, including zero, override it without changing
+the default or rebuilding the response SVD. The existing `run_jacobian(n_steps)`
+wrapper uses the default through `step`.
 
 ## Relative beta objective
 
@@ -818,8 +819,8 @@ changes, or add log entries. Action exceptions propagate.
   and supplied results must describe the same machine state.
 - Constructor evaluation and diagnostic restoration must support supplied results
   too. Multi-evaluation algorithms (`step`/`solve`) still need new evaluations for
-  their candidates; supplied results apply only to their starting point (also
-  through `run_jacobian`). A single supplied table cannot replace later
+  their candidates; supplied results apply only to their starting point.
+  A single supplied table cannot replace later
   evaluations or numerical derivative probes.
 
 ## One explicit least-squares step
