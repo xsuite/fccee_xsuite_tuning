@@ -825,7 +825,7 @@ changes, or add log entries. Action exceptions propagate.
 
 ## One explicit least-squares step
 
-`run_lstsq(action_results=None, jacobian=None, *, rcond=None,
+`run_lstsq(action_results=None, *, rcond=None,
 sing_val_cutoff=None, step_scale=1.0, tag_outcome=True)` evaluates the starting
 targets, computes one direction, and applies it. By default, it then runs the
 actions at the changed knobs and records the evaluated outcome with `tag('lstsq')`.
@@ -838,15 +838,12 @@ outcome evaluation and log entry. The caller evaluates the candidate and can
 record it with `tag()`, or explicitly pass `tag_outcome=True`. Ordinary optimizers
 retain the default of `True`.
 
-Jacobian precedence:
+Use the installed fixed response and its cached SVD. Without a fixed response,
+compute the usual Jacobian only when action results were omitted. Supplied
+results require a fixed response: no hidden derivative probes are allowed.
+Replace the response explicitly through `set_response` when needed.
 
-1. An explicit Jacobian applies only to this call.
-2. Otherwise use the installed fixed response and its cached SVD.
-3. With neither, compute the usual Jacobian only when action results were omitted.
-4. Supplied results without a supplied/stored Jacobian are an error: no hidden
-   derivative probes are allowed.
-
-Explicit Jacobians follow `set_response`: full target/vary order, transformed but
+Response matrices supplied to `set_response` use full target/vary order, transformed but
 unweighted residuals differentiated with respect to physical knobs. Optimize
 applies target weights, knob scales, active masks, and SVD cutoffs. Preserve the
 existing `Vary.max_step` convention of the Jacobian solver. Limit the direction
