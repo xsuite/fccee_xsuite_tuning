@@ -1,6 +1,6 @@
 """Install the static errors of K. Andre et al., 2 July 2026, slide 7.
 
-Run with an editable Xsuite installation. Output includes deferred expressions,
+Run with Xsuite installed (pip install xsuite). Output includes deferred expressions,
 the seed, sampled errors, and BPM alignment variable names.
 """
 from pathlib import Path

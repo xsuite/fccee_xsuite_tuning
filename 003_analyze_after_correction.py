@@ -206,6 +206,8 @@ def main():
     if SHOW_PLOTS:
         plt.show()
 
+    return line
+
 
 if __name__ == '__main__':
-    main()
+    line = main()
