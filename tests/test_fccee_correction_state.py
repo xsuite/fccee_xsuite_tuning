@@ -587,7 +587,10 @@ def test_optics_targets_use_relative_beta_and_physical_alpha(correction, monkeyp
     expected = np.linalg.lstsq(
         weights[:, None] * physical_response,
         -weights * relative_residuals, rcond=1e-12)[0]
-    np.testing.assert_allclose(opt.get_correction(action_results=supplied, rcond=1e-12), expected)
+    before = np.array(correction.line.get(['quad', 'skew']))
+    opt.run_lstsq(action_results=supplied, rcond=1e-12)
+    np.testing.assert_allclose(
+        np.array(correction.line.get(['quad', 'skew'])) - before, expected)
     correction.optimizers = SimpleNamespace(optics=opt)
     correction.optics_weights = target_weights
     assert status.penalty == pytest.approx(

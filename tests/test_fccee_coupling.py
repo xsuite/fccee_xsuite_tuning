@@ -126,4 +126,5 @@ def test_coupling_targets_match_response_in_observation_order(coupling_problem, 
     tw = evaluate()
     status = opt.target_status(ret=True, action_results=[tw])
     np.testing.assert_allclose(status.residue, expected @ errors)
-    np.testing.assert_allclose(opt.get_correction(action_results=[tw]), -errors)
+    opt.run_lstsq(action_results=[tw])
+    np.testing.assert_allclose(line.get(knobs), 0., atol=1e-14)

@@ -679,7 +679,7 @@ The workflow still owns the common reference and observation policy, precomputes
 response SVDs, and controls candidate evaluations, acceptance and rollback.
 
 Each optimizer sets `rcond` from its module settings (zero for tunes).
-`run_lstsq`, `get_correction`, `step`, `solve`, and `run_jacobian` use this default
+`run_lstsq`, `step`, `solve`, and `run_jacobian` use this default
 when no per-call value is supplied. Explicit per-call values, including zero,
 override it without changing the default or rebuilding the response SVD.
 
@@ -853,8 +853,8 @@ by max_step before multiplying by step_scale; shorten it further if necessary to
 stay within physical knob limits. Inactive varies do not change. An unsuccessful
 calculation must not leave finite-difference probes installed.
 
-The existing `get_correction` API remains available for the unchanged reference.
-The new workflow uses `run_lstsq`, not manual direction application.
+The workflow applies corrections through `run_lstsq`. Direction calculation is
+an internal implementation detail of the optimizer.
 
 ## Goal checks and iteration limits
 

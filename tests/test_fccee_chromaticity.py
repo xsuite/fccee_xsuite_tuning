@@ -124,7 +124,9 @@ def test_chromaticity_response_and_ideal_targets(chromaticity_module, monkeypatc
     count = len(calls)
     status = opt.target_status(ret=True, action_results=[tw])
     np.testing.assert_allclose(status.residue, [.2, -.3])
-    step = opt.get_correction(action_results=[tw])
+    before = np.array(line.get(knobs))
+    opt.run_lstsq(action_results=[tw])
+    step = np.array(line.get(knobs)) - before
     np.testing.assert_allclose(matrix @ step, [-.2, .3])
     assert len(calls) == count
     missing = xd.Table(dict(name=np.array(['ip'])), col_names=['name'])

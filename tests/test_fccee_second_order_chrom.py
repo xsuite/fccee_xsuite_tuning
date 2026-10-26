@@ -125,7 +125,10 @@ def test_response_targets_and_metrics_use_consistent_derivative_conventions(modu
     assert not opt.goal(tw)
     np.testing.assert_allclose(opt.compute_metrics(tw)['second_order_chrom_error'], [2., -3.])
     count = len(calls)
-    np.testing.assert_allclose(matrix @ opt.get_correction(action_results=[tw]), [-4., 6.])
+    before = np.array(line.get(knobs))
+    opt.run_lstsq(action_results=[tw])
+    step = np.array(line.get(knobs)) - before
+    np.testing.assert_allclose(matrix @ step, [-4., 6.])
     assert len(calls) == count
     np.testing.assert_allclose([t.tol for t in opt.targets], 2.)
     missing = xd.Table(dict(name=np.array(['ip'])), col_names=['name'])
