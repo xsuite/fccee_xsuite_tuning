@@ -11,6 +11,9 @@ dispersion, transverse coupling, tunes, and first- and second-order chromaticity
 The scripts expose their configuration and intermediate objects for interactive
 inspection.
 
+The code is based on the material available in the
+[FCC-ee optics tuning WG meetings](https://indico.cern.ch/category/18470/).
+
 ## Environment
 
 Install the production Xsuite package in your Python environment:
