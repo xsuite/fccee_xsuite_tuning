@@ -5,12 +5,14 @@ correction, final refinement, Twiss evaluation, snapshots and accepted state.
 Optimizers consume supplied Twiss tables and apply least-squares changes.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from types import SimpleNamespace
 
 import numpy as np
 import xtrack as xt
+
+from twiss_settings import twiss_settings, compensate_rf_phases
 
 import corr_optics
 import corr_orbit
@@ -33,11 +35,13 @@ class MachineSnapshot:
     """Controls and accepted orbit needed to undo an unaccepted error-increase trial.
 
     Twiss tables are retained by reference; correction steps treat them as
-    read-only, including their closed-orbit particle. Variable values are copied.
+    read-only, including their closed-orbit particle. Knob values and cavity
+    phase tapers are copied; magnet tapers remain fixed throughout correction.
     """
 
     knob_values: dict
     last_accepted_twiss: object
+    phase_tapers: dict = field(default_factory=dict)
 
 
 class FCCeeCorrection:
@@ -54,10 +58,12 @@ class FCCeeCorrection:
     correction_errors = (ValueError, RuntimeError, xt.twiss.ClosedOrbitSearchError)
 
     def __init__(self, line, *, reference_twiss, intermediate_max_iterations=5,
-                 final_max_iterations=40, optimizer_settings=None, steps_R_matrix=None, log=None):
+                 final_max_iterations=40, optimizer_settings=None, steps_R_matrix=None, log=None,
+                 method='4d'):
         # Use the supplied clean reference and shared Twiss settings.
         self._start_time = perf_counter()
         self.line = line
+        self.method = method
         self.reference = reference_twiss
         self.log = self._default_log if log is None else log
         optimizer_settings = optimizer_settings or {}
@@ -69,7 +75,7 @@ class FCCeeCorrection:
             steps_R_matrix = DEFAULT_STEPS_R_MATRIX
         self.steps_r_matrix = steps_R_matrix.copy()
         self.log('Preparing correction responses')
-        twiss_kwargs = dict(delta_chrom=self.delta_chrom,
+        twiss_kwargs = dict(method=method, delta_chrom=self.delta_chrom,
                             steps_R_matrix=self.steps_r_matrix.copy())
 
         # Use the BPMs and main IPs as observation points.
@@ -324,6 +330,9 @@ class FCCeeCorrection:
         return MachineSnapshot(
             knob_values={name: float(values[name]) for name in self.control_names},
             last_accepted_twiss=self.last_accepted_twiss,
+            phase_tapers={name: float(el.phase_taper)
+                          for name, el in self.line.element_dict.items()
+                          if hasattr(el, 'phase_taper')},
         )
 
     def restore(self, snapshot):
@@ -333,6 +342,8 @@ class FCCeeCorrection:
             name: value for name, value in snapshot.knob_values.items()
             if values[name] != value
         })
+        for name, phase in snapshot.phase_tapers.items():
+            self.line[name].phase_taper = phase
         self.last_accepted_twiss = snapshot.last_accepted_twiss
 
     def log_iteration(self, iteration, tw):
@@ -345,7 +356,7 @@ class FCCeeCorrection:
                    if chrom or name not in ('chromaticity', 'second_order_chrom'))
 
     def twiss(self, co_guess=None, *, only_orbit=False, chrom=False):
-        """Evaluate 4D optics at the reference momentum, using a zero guess if omitted."""
+        """Measure optics, refreshing RF phases at zero mean momentum in 5D mode."""
         if co_guess is None:
             co_guess = dict(x=0, px=0, y=0, py=0, zeta=0, delta=0)
         started = perf_counter()
@@ -353,8 +364,11 @@ class FCCeeCorrection:
         if only_orbit:
             self.stats['orbit_calls'] += 1
         try:
+            method = self.method
+            if method == '5d':
+                co_guess = compensate_rf_phases(self.line, co_guess=co_guess)
             return self.line.twiss(
-                method='4d', delta0=0.0, co_guess=co_guess,
+                **twiss_settings(dict(method=method)), co_guess=co_guess,
                 chrom=chrom,
                 delta_chrom=self.delta_chrom,
                 steps_R_matrix=self.steps_r_matrix.copy(),
@@ -392,11 +406,12 @@ class FCCeeCorrection:
         self.control_names = self.correction_knobs + ['on_errors', 'on_nonlinear']
 
 
-def prepare_reference(line, *, delta_chrom=2e-4, steps_R_matrix=None):
+def prepare_reference(line, *, delta_chrom=2e-4, steps_R_matrix=None, method='4d'):
     """Return clean chromatic Twiss and leave the line ready for response preparation.
 
-    Disable errors and zero correction trims, retaining nominal nonlinear
-    strengths. Call before constructing FCCeeCorrection to inspect the reference.
+    Disable errors and zero ordinary correction trims, retaining nominal nonlinear
+    strengths, magnet tapers and dedicated tapering orbit trims. Call before
+    constructing FCCeeCorrection to inspect the reference.
     """
     if steps_R_matrix is None:
         steps_R_matrix = DEFAULT_STEPS_R_MATRIX
@@ -410,9 +425,13 @@ def prepare_reference(line, *, delta_chrom=2e-4, steps_R_matrix=None):
     line.set(circuits['tunes']['nominal_values'])
     line.set(dict.fromkeys(circuits['chromaticity']['knobs'], 0.))
     line.set(dict.fromkeys(circuits['second_order_chrom']['knobs'], 0.))
+    co_guess = dict(x=0, px=0, y=0, py=0, zeta=0, delta=0)
+    if method == '5d':
+        line.configure_radiation(model='mean')
+        co_guess = compensate_rf_phases(line)
     return line.twiss(
-        method='4d', delta0=0., chrom=True, radiation_integrals=False,
-        co_guess=dict(x=0, px=0, y=0, py=0, zeta=0, delta=0),
+        **twiss_settings(dict(method=method)), chrom=True, radiation_integrals=False,
+        co_guess=co_guess,
         delta_chrom=delta_chrom, steps_R_matrix=steps_R_matrix.copy())
 
 

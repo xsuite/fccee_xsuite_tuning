@@ -6,6 +6,7 @@ import numpy as np
 import xtrack as xt
 
 from correction_optimizer import CorrectionOptimizer
+from twiss_settings import twiss_settings
 
 
 DEFAULT_TUNE_CORR_SETTINGS = SimpleNamespace(
@@ -20,7 +21,7 @@ def build_tune_corr_optimizer(line, reference, *, settings=None, **twiss_kwargs)
     circuits = line.metadata['correction_knobs']['tunes']
     knobs = circuits['knobs']
     response = build_tune_response(
-        reference, line=line, tune_knobs=knobs, **twiss_kwargs)
+        reference, line=line, tune_knobs=knobs, **twiss_settings(twiss_kwargs))
     targets = [
         xt.Target('qx', value=reference.qx,
                   tol=settings.tune_tol, tag='qx'),
@@ -32,10 +33,10 @@ def build_tune_corr_optimizer(line, reference, *, settings=None, **twiss_kwargs)
         vary.append(xt.Vary(knob, step=1e-7))
     optimizer = CorrectionOptimizer(
         line=line, reference_twiss=reference, settings=settings,
-        method='4d', delta0=0., chrom=False, radiation_integrals=False,
+        chrom=False, radiation_integrals=False,
         allow_twiss_failure=False,
         co_guess=dict(x=0, px=0, y=0, py=0, zeta=0, delta=0),
-        **twiss_kwargs,
+        **twiss_settings(twiss_kwargs),
         compute_metrics=compute_metrics, goal=goal,
         print_metrics=print_metrics,
         name='tunes',
@@ -94,8 +95,8 @@ def build_tune_response(tw, *, line, tune_knobs, **twiss_kwargs):
     try:
         for j in range(2):
             line[tune_knobs[j]] = baseline[j] + 1e-7
-            probe = line.twiss(method='4d', delta0=0., chrom=False, radiation_integrals=False,
-                               co_guess=tw.particle_on_co, **twiss_kwargs)
+            probe = line.twiss(chrom=False, radiation_integrals=False,
+                               co_guess=tw.particle_on_co, **twiss_settings(twiss_kwargs))
             jac[:, j] = (np.array([probe.qx, probe.qy]) - np.array([tw.qx, tw.qy])) / 1e-7
             line.set(tune_knobs, baseline)
     finally:

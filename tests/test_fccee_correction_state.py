@@ -32,6 +32,7 @@ def correction(monkeypatch):
     # The full-lattice comparison exercises construction and physics. Here we
     # isolate accepted-state updates and snapshots from the expensive FCC-specific preparation.
     state = object.__new__(module.FCCeeCorrection)
+    state.method = '4d'
     state.line = xt.Line(elements=[xt.Drift(length=1)])
     state.line.vars.update(
         dict(orbit=2.0, quad=3.0, skew=4.0, tune=12.0, on_errors=0.2, on_nonlinear=0.2)
@@ -1165,3 +1166,37 @@ def test_constructor_uses_supplied_reference_before_starting_ramp(correction, mo
     assert len(built) == 7
     assert len(calls) == state.stats['calls'] == 1
     assert state.last_accepted_twiss is reference
+
+
+def test_5d_measurement_compensates_phases_and_rollback_restores_them(correction, monkeypatch):
+    correction.method = '5d'
+    correction.steps_r_matrix = dict(dx=1e-8)
+    correction.stats = dict(calls=0, seconds=0., orbit_calls=0, orbit_seconds=0.)
+    correction.line.env.new('rf', xt.Cavity, phase_taper=.2)
+    correction.line['tapering_orbit_trim'] = 3e-6
+    correction.line['on_tapering_orbit_corr'] = 1.
+    before = correction.snapshot()
+    defaults = deepcopy(correction.line.twiss_default)
+    def compensate(**kwargs):
+        assert kwargs == dict(taper_magnets=False, delta0='zero_mean', verbose=False, co_guess=seed)
+        correction.line['rf'].phase_taper = .4
+    monitor = SimpleNamespace(**{
+        key: np.array([[.001, .002]]) for key in ('x', 'px', 'y', 'py', 'delta')})
+    monkeypatch.setattr(xt.Line, 'record_last_track', property(lambda _: monitor))
+    seed = correction.last_accepted_twiss.particle_on_co
+    def measure(**kwargs):
+        assert correction.line['rf'].phase_taper == .4
+        assert kwargs['method'] == '5d' and kwargs['zeta0'] == 0.
+        assert 'delta0' not in kwargs
+        assert kwargs['co_guess'] == dict(x=.001, px=.001, y=.001, py=.001, delta=.001, zeta=0.)
+        return correction.last_accepted_twiss
+    monkeypatch.setattr(correction.line, 'compensate_radiation_energy_loss', compensate)
+    monkeypatch.setattr(correction.line, 'twiss', measure)
+    correction.twiss(co_guess=seed)
+    correction.scale_corrections(.4)
+    assert correction.line['tapering_orbit_trim'] == 3e-6
+    correction.restore(before)
+    assert correction.line['rf'].phase_taper == .2
+    assert correction.line['tapering_orbit_trim'] == 3e-6
+    assert correction.line['on_tapering_orbit_corr'] == 1.
+    assert correction.line.twiss_default == defaults

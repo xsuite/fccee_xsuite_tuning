@@ -22,7 +22,7 @@ from corr_second_order_chrom import DEFAULT_SECOND_ORDER_CHROM_SETTINGS
 
 # Settings
 HERE = Path(__file__).resolve().parent
-INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
+INPUT = HERE / 'fccee_z_lcc_tapered.json'
 OUTPUT_DIR = HERE / 'response_api_class'
 TARGET_ERROR_FRACTION = 1.0
 INITIAL_INCREMENT = 0.0125
@@ -44,12 +44,12 @@ optimizer_settings = dict(
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 line = xt.load(INPUT)
 reference_twiss = prepare_reference(
-    line, delta_chrom=optimizer_settings['second_order_chrom'].delta_chrom,
+    line, method='5d', delta_chrom=optimizer_settings['second_order_chrom'].delta_chrom,
     steps_R_matrix=STEPS_R_MATRIX)
 
 # Build the optimizers from the shared reference.
 correction = FCCeeCorrection(
-    line=line, reference_twiss=reference_twiss,
+    line=line, reference_twiss=reference_twiss, method='5d',
     intermediate_max_iterations=5, final_max_iterations=40,
     optimizer_settings=optimizer_settings, steps_R_matrix=STEPS_R_MATRIX)
 
@@ -64,6 +64,11 @@ success = correction.run(
 # Save the accepted machine, including a partial result after failure
 full_correction = success and abs(correction.error_fraction - 1.) < 1e-12
 output = OUTPUT_DIR / ('machine.json' if full_correction else 'partial.json')
+# Save seeds at the correction and analysis starting points for independent reloads.
+tw = correction.last_accepted_twiss
+line.metadata['orbit_guesses'] = {
+    name: {key: float(tw[key, name]) for key in ('x', 'px', 'y', 'py', 'zeta', 'delta')}
+    for name in dict.fromkeys([line.element_names[0], 'ipd', 'septum'])}
 line.to_json(output, indent=None)
 correction.log(f'Saved {output}')
 correction.log('Finished')

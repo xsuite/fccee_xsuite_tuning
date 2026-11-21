@@ -50,10 +50,17 @@ strength writes **`response_api_class/machine.json`**, the standard input to the
 analysis scripts.
 the analysis scripts do not select it automatically.
 
-`002` explicitly creates `reference_twiss` before constructing `FCCeeCorrection`.
-The reference has errors and correction trims off, with nominal nonlinear
-strengths and chromatic quantities enabled. Correction uses radiation and
-tapering off. Both chromatic corrections are skipped during the error ramp and
+`002` loads `fccee_z_lcc_tapered.json` from `001b` and explicitly creates
+`reference_twiss` before constructing `FCCeeCorrection`.
+The reference has errors and ordinary correction trims off, with nominal
+nonlinear strengths and chromatic quantities enabled. Correction uses 5D Twiss
+with mean radiation, preserving the saved magnet tapers and dedicated tapering
+orbit trims. RF phases are refreshed at zero mean
+momentum before each workflow measurement and restored when a trial is rejected.
+Compensation reuses the previous orbit as its starting guess, and Twiss uses the
+orbit from compensation's final track. The saved machine includes orbit guesses
+at the correction start, IPD and the septum for independent analysis reloads.
+Both chromatic corrections are skipped during the error ramp and
 applied during refinement, first order before second order. All correction
 goals are rechecked after changes.
 
@@ -77,16 +84,17 @@ between ideal and common tapering. `INITIAL_INCREMENT`, `MIN_INCREMENT` and
 `MAX_ITERATIONS` are exposed in the script. Existing files from `001` without the
 dedicated circuit are supported; `001b` installs it when needed.
 
-This preparation can be run independently. `002` still uses its original
-radiation-free input and 4D correction workflow; consuming the prepared radiating
-machine throughout optics/coupling correction is a subsequent extension. The
-ordinary correction circuit does not include or scale the dedicated tapering trims.
+The ordinary correction circuit does not include or scale the dedicated tapering
+trims. `002` ramps errors and ordinary correction knobs from this prepared state;
+magnet taper values stay fixed. The correction modules still support explicit 4D
+settings for radiation-free studies and tests.
 
 ## Analyze the corrected machine
 
-Analysis scripts load `response_api_class/machine.json` and construct clean
-vs corrected comparisons. They save standalone results and show plots by
-default. For interactive plotting, start IPython and run:
+Analysis scripts load `response_api_class/machine.json` and compare it with the
+clean prepared machine in `fccee_z_lcc_tapered.json`. Both retain their dedicated
+tapering orbit trims and magnet settings. They save standalone results and show
+plots by default. For interactive plotting, start IPython and run:
 
 ```python
 %matplotlib
@@ -97,12 +105,15 @@ default. For interactive plotting, start IPython and run:
 
 - [`003_analyze_after_correction.py`](003_analyze_after_correction.py) compares
   on-momentum beta functions and scans orbit, beta functions, and tunes versus
-  momentum offset in 4D. Results go to `analysis/momentum_scan/`. Failed or
-  unreached scan points are retained as NaNs.
+  starting-momentum offset in 5D, with RF phases held fixed during each scan.
+  Results go to `analysis/momentum_scan/`. Failed or unreached scan points are
+  retained as NaNs.
 - [`004_da_ma_6d.py`](004_da_ma_6d.py) performs 6D DA/MA tracking from the septum
-  with active RF and independent mean-radiation tapering for each machine.
-  `RADIATION_MODEL` selects mean or quantum radiation. Results normally go to
-  `analysis/da_ma_6d/`; suppressing arc-dipole b4 selects `analysis/da_ma_6d_b4_off/`.
+  with active RF, 5D launch optics and the saved magnet taper settings. Only RF
+  phases are compensated; magnets are not retapered.
+  Zeta may slip on the 5D orbit; subsequent tracking evolves all six coordinates
+  without resetting it. `RADIATION_MODEL` selects mean or quantum radiation.
+  Results normally go to `analysis/da_ma_6d/`; suppressing arc-dipole b4 selects `analysis/da_ma_6d_b4_off/`.
 
 
 ## Code and documentation

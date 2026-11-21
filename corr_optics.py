@@ -6,6 +6,7 @@ import numpy as np
 import xtrack as xt
 
 from correction_optimizer import CorrectionOptimizer
+from twiss_settings import twiss_settings
 from response_builders import normal_quadrupole_response
 import corr_tune
 
@@ -92,10 +93,10 @@ def build_opt_corr_optimizer(line, reference, *, knobs, observation_names,
 
     optimizer = CorrectionOptimizer(
         line=line, reference_twiss=reference, settings=settings,
-        method='4d', delta0=0., chrom=False, radiation_integrals=False,
+        chrom=False, radiation_integrals=False,
         allow_twiss_failure=False,
         co_guess=dict(x=0, px=0, y=0, py=0, zeta=0, delta=0),
-        **twiss_kwargs,
+        **twiss_settings(twiss_kwargs),
         compute_metrics=compute_metrics, goal=goal,
         print_metrics=print_metrics,
         name='normal optics and horizontal dispersion',

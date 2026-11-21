@@ -72,3 +72,43 @@ def test_separate_action_fits_do_not_alias_horizontal_curvature_into_vertical_sl
     # With no curvature, recover all four coefficients and the geometric units.
     linear = np.array([.157, .2]) + actions @ detuning.T
     np.testing.assert_allclose(analysis.detuning_slopes(linear, 3.), detuning, rtol=1e-7)
+
+
+def test_5d_momentum_scan_offsets_from_nominal_starting_delta(monkeypatch):
+    import xdeps as xd
+    spec = importlib.util.spec_from_file_location('fccee_scan',
+        Path(__file__).resolve().parents[1] / '003_analyze_after_correction.py')
+    scan = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scan)
+    def table(delta):
+        return xd.Table(dict(name=np.array(['bpm']), delta=np.array([delta]),
+                             x=np.zeros(1), y=np.zeros(1), betx=np.ones(1), bety=np.ones(1),
+                             qx=.31, qy=.32, particle_on_co=object()),
+                        col_names=['name', 'delta', 'x', 'y', 'betx', 'bety'])
+    calls = []
+    def twiss(**kwargs):
+        assert kwargs['method'] == '5d'
+        assert 'zeta0' not in kwargs
+        calls.append(kwargs['delta0'])
+        return table(kwargs['delta0'])
+    result = scan.scan_momentum(SimpleNamespace(twiss=twiss), table(.003),
+        np.array([-1e-4, 0., 1e-4]), [0], dict(method='5d', chrom=False), 'Test')
+    np.testing.assert_allclose(calls, [.0031, .0029])
+    assert result[2] == ['', '', '']
+
+
+def test_phase_compensation_reuses_saved_seed_at_cycled_start():
+    from twiss_settings import compensate_rf_phases
+    seed = dict(x=.01, zeta=.03, delta=.001)
+    calls = []
+    line = SimpleNamespace(
+        element_names=['septum'], metadata={'orbit_guesses': {'septum': seed}},
+        record_last_track=SimpleNamespace(**{
+            key: np.array([[value, 99.]])
+            for key, value in dict(x=.02, px=.001, y=.003, py=.004, delta=.005).items()}),
+        compensate_radiation_energy_loss=lambda **kw: calls.append(kw))
+    guess = compensate_rf_phases(line)
+    assert calls[0]['co_guess'] is seed
+    assert calls[0]['taper_magnets'] is False
+    assert guess == dict(x=.02, px=.001, y=.003, py=.004, delta=.005, zeta=0.)
+    assert seed['zeta'] == .03

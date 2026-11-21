@@ -7,6 +7,7 @@ import numpy as np
 import xtrack as xt
 
 from correction_optimizer import CorrectionOptimizer
+from twiss_settings import twiss_settings
 from response_builders import skew_quadrupole_response
 
 
@@ -37,7 +38,7 @@ def build_coupling_corr_optimizer(line, reference, *, observation_names, ip_name
     knobs = circuits['knobs']
     response, scales = prepare_coupling_response(
         line, reference, circuits['magnet_groups'], observation_names,
-        knobs=knobs, log=log, **twiss_kwargs)
+        knobs=knobs, log=log, **twiss_settings(twiss_kwargs))
 
     targets = []
     for name in observation_names:
@@ -75,10 +76,10 @@ def build_coupling_corr_optimizer(line, reference, *, observation_names, ip_name
         vary.append(xt.Vary(knob, step=1e-7, weight=scale))
     optimizer = CorrectionOptimizer(
         line=line, reference_twiss=reference, settings=settings,
-        method='4d', delta0=0., chrom=False, radiation_integrals=False,
+        chrom=False, radiation_integrals=False,
         allow_twiss_failure=False,
         co_guess=dict(x=0, px=0, y=0, py=0, zeta=0, delta=0),
-        **twiss_kwargs,
+        **twiss_settings(twiss_kwargs),
         compute_metrics=compute_metrics, goal=goal,
         print_metrics=print_metrics,
         name='coupling and vertical dispersion', vary=vary, targets=targets)
@@ -178,7 +179,7 @@ def prepare_coupling_response(
             coupling_vector, tw_ref=tw_ref,
             coupling_indices=tw_ref.rows.indices[observation_names],
         ),
-        n_observations=len(observation_names), log=log, **twiss_kwargs,
+        n_observations=len(observation_names), log=log, **twiss_settings(twiss_kwargs),
     )
     # The analytical response groups rows by quantity; targets group them by location.
     matrix = matrix.reshape(5, len(observation_names), len(knobs))
@@ -202,8 +203,8 @@ def check_coupling_response(
     probe = 1e-5 * skew_scale * np.sin(np.arange(len(skew_knobs)) + 0.3)
     line.set(skew_knobs, probe)
     try:
-        probe_tw = line.twiss(method='4d', delta0=0., chrom=False, radiation_integrals=False,
-                              co_guess=tw_ref.particle_on_co, **twiss_kwargs)
+        probe_tw = line.twiss(chrom=False, radiation_integrals=False,
+                              co_guess=tw_ref.particle_on_co, **twiss_settings(twiss_kwargs))
         prediction = coupling_response @ probe
         discrepancy = np.linalg.norm(coupling_vector(probe_tw) - prediction) / np.linalg.norm(
             prediction

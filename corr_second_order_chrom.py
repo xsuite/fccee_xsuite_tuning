@@ -7,6 +7,7 @@ import numpy as np
 import xtrack as xt
 
 from correction_optimizer import CorrectionOptimizer
+from twiss_settings import twiss_settings
 
 
 DEFAULT_SECOND_ORDER_CHROM_SETTINGS = SimpleNamespace(
@@ -37,10 +38,10 @@ def build_second_order_chrom_optimizer(line, reference, *, settings=None, **twis
         vary.append(xt.Vary(knob, step=settings.response_step))
     optimizer = CorrectionOptimizer(
         line=line, reference_twiss=reference, settings=settings,
-        method='4d', delta0=0., chrom=True, radiation_integrals=False,
+        chrom=True, radiation_integrals=False,
         allow_twiss_failure=False,
         co_guess=dict(x=0, px=0, y=0, py=0, zeta=0, delta=0),
-        **twiss_kwargs,
+        **twiss_settings(twiss_kwargs),
         compute_metrics=compute_metrics, goal=goal, print_metrics=print_metrics,
         name='second_order_chrom',
         vary=vary, targets=targets)
@@ -48,7 +49,7 @@ def build_second_order_chrom_optimizer(line, reference, *, settings=None, **twis
     optimizer.second_order_chrom_tol = settings.second_order_chrom_tol
     optimizer.rcond = settings.rcond
     optimizer.set_response(build_second_order_chrom_response(
-        line, reference, knobs=knobs, step=settings.response_step, **twiss_kwargs))
+        line, reference, knobs=knobs, step=settings.response_step, **twiss_settings(twiss_kwargs)))
     return optimizer
 
 
@@ -94,11 +95,11 @@ def build_second_order_chrom_response(line, reference, *, knobs, step, **twiss_k
     try:
         for column, knob in enumerate(knobs):
             line[knob] = baseline[column] + step
-            plus = line.twiss(method='4d', delta0=0., chrom=True, radiation_integrals=False,
-                               co_guess=reference.particle_on_co, **twiss_kwargs)
+            plus = line.twiss(chrom=True, radiation_integrals=False,
+                               co_guess=reference.particle_on_co, **twiss_settings(twiss_kwargs))
             line[knob] = baseline[column] - step
-            minus = line.twiss(method='4d', delta0=0., chrom=True, radiation_integrals=False,
-                               co_guess=reference.particle_on_co, **twiss_kwargs)
+            minus = line.twiss(chrom=True, radiation_integrals=False,
+                               co_guess=reference.particle_on_co, **twiss_settings(twiss_kwargs))
             response[:, column] = np.array([plus.ddqx-minus.ddqx,
                                              plus.ddqy-minus.ddqy])/(2*step)
             line[knob] = baseline[column]

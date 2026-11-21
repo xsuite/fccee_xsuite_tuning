@@ -78,7 +78,8 @@ def test_chromaticity_installer_rejects_existing_knob(chromaticity_module):
     assert 'on_chromaticity_corr' not in line.vars
 
 
-def test_chromaticity_response_and_ideal_targets(chromaticity_module, monkeypatch):
+@pytest.mark.parametrize('method', ['4d', '5d'])
+def test_chromaticity_response_and_ideal_targets(chromaticity_module, monkeypatch, method):
     line = sextupole_line()
     line['on_nonlinear'] = 1.
     knobs = chromaticity_module.install_chromaticity_knobs(line)
@@ -89,7 +90,8 @@ def test_chromaticity_response_and_ideal_targets(chromaticity_module, monkeypatc
     def evaluate(co_guess=None, *, chrom=True, **kwargs):
         assert chrom
         if kwargs:
-            assert kwargs['method'] == '4d' and kwargs['delta0'] == 0.
+            assert kwargs['method'] == method
+            assert kwargs['delta0' if method == '4d' else 'zeta0'] == 0.
             assert kwargs['delta_chrom'] == 2e-4
             assert kwargs['radiation_integrals'] is False
         calls.append(line['on_nonlinear'])
@@ -102,10 +104,10 @@ def test_chromaticity_response_and_ideal_targets(chromaticity_module, monkeypatc
     reference = evaluate()
     monkeypatch.setattr(line, 'twiss', evaluate)
     opt = chromaticity_module.build_chromaticity_corr_optimizer(
-        line, reference)
+        line, reference, method=method)
     assert opt.action_twiss.line is line
     assert all(target.action is opt.action_twiss for target in opt.targets)
-    assert opt.action_twiss.kwargs['method'] == '4d'
+    assert opt.action_twiss.kwargs['method'] == method
     assert opt.action_twiss.kwargs['chrom'] is True
     assert not opt.action_twiss.allow_twiss_failure
     assert opt.action_twiss.kwargs['delta_chrom'] == 2e-4

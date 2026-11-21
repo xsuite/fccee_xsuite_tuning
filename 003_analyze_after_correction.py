@@ -1,7 +1,8 @@
-"""Clean/corrected tunes versus delta and on-momentum beta comparison (4D).
+"""Clean/corrected tunes versus delta and on-momentum beta comparison (5D).
 
-Clean and corrected machines are scanned on the same delta grid. Both beta
-beating curves use the ideal delta=0 lattice, with nominal nonlinear strengths.
+Clean and corrected machines are scanned on the same starting-momentum offset
+grid. Both beta beating curves use the clean prepared nominal lattice. RF phases
+are fixed during each scan; magnet taper settings and dedicated trims are retained.
 Orbit is in lattice coordinates, not the BPM measurement frame. Both are
 sampled at BPM entrances and ipa/ipd/ipg/ipj. Failed Twiss points remain NaN.
 """
@@ -13,10 +14,12 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 import xtrack as xt
+from twiss_settings import compensate_rf_phases
 
-# Configuration (delta = (p-p0)/p0).
+# Scan offsets from each machine's nominal starting delta, with RF phases fixed.
 HERE = Path(__file__).resolve().parent
 INPUT = HERE / 'response_api_class' / 'machine.json'
+CLEAN_INPUT = HERE / 'fccee_z_lcc_tapered.json'
 OUTPUT_DIR = HERE / 'analysis' / 'momentum_scan'
 DELTA_MAX = 0.01
 NUM_POINTS = 21                     # Odd, so zero is included; spacing 0.001.
@@ -24,7 +27,7 @@ SHOW_PLOTS = True                   # Set False for batch runs.
 MAX_CONTINUATION_STEP = 5e-4
 MIN_CONTINUATION_STEP = 1e-6
 MAX_TUNE_STEP = 0.25                # Reject ambiguous/discontinuous mode branches.
-CO_SEARCH_AT = 'ipd'                # Zero-guess search at ipa fails on this seed.
+START_AT = 'ipd'
 IPS = ['ipa', 'ipd', 'ipg', 'ipj']
 STEPS_R_MATRIX = dict(dx=1e-8, dpx=1e-9, dy=1e-8, dpy=1e-9,
                       dzeta=1e-7, ddelta=1e-8)
@@ -53,7 +56,7 @@ def scan_momentum(line, tw0, deltas, indices, settings, label):
                     trial = current + np.sign(target - current) * step
                     try:
                         candidate = line.twiss(
-                            delta0=trial, co_guess=seed.particle_on_co, **settings)
+                            delta0=tw0.delta[0] + trial, co_guess=seed.particle_on_co, **settings)
                         if not np.all(np.isfinite([candidate.qx, candidate.qy])):
                             raise ValueError('Nonfinite tunes')
                         tune_step = np.array([candidate.qx - seed.qx,
@@ -96,36 +99,24 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print('Loading', INPUT, flush=True)
     line = xt.load(INPUT, with_progress=False)
-    line.configure_radiation(model=None)
-    # Remove any serialized zero guess; do not inherit correction-only defaults.
-    line.twiss_default.clear()
-    if any(getattr(el, 'delta_taper', 0.) != 0.
-           for el in line.element_dict.values()):
-        raise ValueError('Use the untapered standard machine')
-    settings = dict(method='4d', chrom=False, steps_R_matrix=STEPS_R_MATRIX)
-    tw0 = line.twiss(delta0=0., co_search_at=CO_SEARCH_AT, **settings)
-    print(f'Independent closed orbit: Qx={tw0.qx:.9f}, Qy={tw0.qy:.9f}', flush=True)
-
-    # Recover the ideal lattice on the identical element layout. Disable every
-    # installed correction and zero the tune offsets without overwriting their families.
+    settings = dict(method='5d', chrom=False, steps_R_matrix=STEPS_R_MATRIX)
+    def prepare(machine):
+        machine.cycle(name_first_element=START_AT, inplace=True)
+        machine.configure_radiation(model='mean')
+        co_guess = compensate_rf_phases(machine)
+        return machine.twiss(zeta0=0., co_guess=co_guess, **settings)
+    tw0 = prepare(line)
+    clean_line = xt.load(CLEAN_INPUT, with_progress=False)
+    reference = prepare(clean_line)
     circuits = line.metadata['correction_knobs']
-    ideal_values = {name: 0. for name in circuits['switches'].values()}
-    ideal_values.update(on_nonlinear=1., on_chromaticity_corr=0.)
-    ideal_values.update(circuits['tunes']['nominal_values'])
     names = list(dict.fromkeys(circuits['orbit']['x']['monitors'] + IPS))
     indices = tw0.rows.indices[names]
     s = tw0.s[indices]
     deltas = np.linspace(-DELTA_MAX, DELTA_MAX, NUM_POINTS)
     zero = NUM_POINTS // 2
     deltas[zero] = 0.
-    before = {name: float(line[name]) for name in ideal_values}
-    try:
-        line.vars.update(ideal_values)
-        reference = line.twiss(delta0=0., co_search_at=CO_SEARCH_AT, **settings)
-        clean_data, clean_tunes, clean_errors, clean_reached_delta = scan_momentum(
-            line, reference, deltas, indices, settings, 'Clean')
-    finally:
-        line.vars.update(before)
+    clean_data, clean_tunes, clean_errors, clean_reached_delta = scan_momentum(
+        clean_line, reference, deltas, indices, settings, 'Clean')
     np.testing.assert_array_equal(tw0.name, reference.name)
     data, tunes, errors, reached_delta = scan_momentum(
         line, tw0, deltas, indices, settings, 'Corrected')
@@ -141,11 +132,13 @@ def main():
                         clean_errors=np.array(clean_errors),
                         clean_reached_delta=clean_reached_delta,
                         **{'clean_' + key: value for key, value in clean_data.items()})
-    summary = dict(input=str(INPUT.resolve()), radiation=False, tapering=False,
-                   method='4d', co_search_at=CO_SEARCH_AT,
+    summary = dict(input=str(INPUT.resolve()), clean_input=str(CLEAN_INPUT.resolve()),
+                   radiation='mean', tapering='saved settings',
+                   method='5d', start_at=START_AT,
+                   delta_definition='offset from each machine starting momentum',
                    observation_points='BPM entrances plus ipa/ipd/ipg/ipj',
                    orbit_coordinates='lattice frame [m], no BPM alignment subtraction',
-                   beta_reference='ideal at delta=0; nominal nonlinear strengths',
+                   beta_reference='clean prepared machine at zero momentum offset',
                    ideal_tunes=[float(reference.qx), float(reference.qy)],
                    max_continuation_step=MAX_CONTINUATION_STEP,
                    min_continuation_step=MIN_CONTINUATION_STEP,
@@ -168,11 +161,11 @@ def main():
                 if err:
                     ax.axvline(100 * delta, color=color, alpha=0.15)
         ax.set_ylabel(f'Q{plane}')
-        ax.set_xlabel('δ [%]')
+        ax.set_xlabel('Δδ at start [%]')
         ax.set_xlim(-100 * DELTA_MAX, 100 * DELTA_MAX)
         ax.grid(alpha=0.25)
         ax.legend()
-    fig.suptitle('Tunes versus δ; radiation/tapering off\n'
+    fig.suptitle('Tunes versus δ; mean radiation; saved tapering\n'
                  'Blue/orange vertical lines: corrected/clean failed or unreached')
     fig.savefig(OUTPUT_DIR / 'tunes_vs_delta.png', dpi=180)
     if not SHOW_PLOTS:
@@ -195,7 +188,7 @@ def main():
         axes[0, jj].legend()
     for ax in axes.flat:
         ax.grid(alpha=0.25)
-    fig.suptitle('On-momentum beta at BPM entrances + four IPs; radiation/tapering off')
+    fig.suptitle('On-momentum beta at BPM entrances + four IPs; mean radiation; saved tapering')
     fig.savefig(OUTPUT_DIR / 'beta_along_ring.png', dpi=180)
     if not SHOW_PLOTS:
         plt.close(fig)

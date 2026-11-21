@@ -1,6 +1,6 @@
 """Team-style DA and amplitude-versus-initial-delta survival maps at the septum.
 
-6D tracking, active RF, independent mean-radiation tapering for clean/corrected
+6D tracking from 5D optics, active RF and saved magnet tapering for clean/corrected
 machines, followed by the selected radiation model. No correction is run.
 MA here is a survival map, not a local Touschek momentum acceptance or lifetime.
 Run in IPython with %matplotlib followed by %run 004_da_ma_6d.py.
@@ -14,9 +14,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xtrack as xt
 import xobjects as xo
+from twiss_settings import compensate_rf_phases
 
 HERE = Path(__file__).resolve().parent
 INPUT = HERE / 'response_api_class' / 'machine.json'
+CLEAN_INPUT = HERE / 'fccee_z_lcc_tapered.json'
 SUPPRESS_ARC_DIPOLE_B4 = False       # Installed systematic + random b4 errors only.
 OUTPUT_DIR = HERE / 'analysis' / ('da_ma_6d_b4_off' if SUPPRESS_ARC_DIPOLE_B4 else 'da_ma_6d')
 LAUNCH_AT = 'septum'
@@ -43,7 +45,7 @@ PILOT_TURNS = 64
 PILOT_PARTICLES = 128
 RUN_SCANS = True                  # False: preparation and runtime pilot only.
 SHOW_PLOTS = True
-CHECK_AMPLITUDE_DETUNING = False   # Optional conservative diagnostic before tapering.
+CHECK_AMPLITUDE_DETUNING = False   # Optional radiation-free diagnostic with saved tapers.
 DETUNING_TURNS = 512
 DETUNING_MAX_SECONDS_PER_CASE = 120.
 DETUNING_AMPLITUDES = np.array([[.5, .5], [1., .5], [2., .5], [3., .5],
@@ -110,18 +112,8 @@ def track_amplitude_detuning(line, tw, turns, label):
 
 
 def prepare_machine(clean):
-    line = xt.load(INPUT, with_progress=False)
-    line.twiss_default.clear()
+    line = xt.load(CLEAN_INPUT if clean else INPUT, with_progress=False)
     line.configure_radiation(model=None)
-    if any(getattr(el, 'delta_taper', 0.) != 0.
-           for el in line.element_dict.values()):
-        raise ValueError('Input must be the untapered standard corrected machine')
-    if clean:
-        circuits = line.metadata['correction_knobs']
-        values = {name: 0. for name in circuits['switches'].values()}
-        values.update(on_nonlinear=1., on_chromaticity_corr=0.)
-        values.update(circuits['tunes']['nominal_values'])
-        line.vars.update(values)
     b4_before = float(line['on_error_arc_dipole_b4'])
     if SUPPRESS_ARC_DIPOLE_B4:
         # Keep the saved correction settings and nominal octupole strengths.
@@ -145,20 +137,22 @@ def prepare_machine(clean):
     line.configure_radiation(model='mean')
     line.tracker.track_flags.XS_FLAG_KILL_CAVITY_KICK = False
     # Keep the mean reference energy fixed, sharing the loss among active RF.
-    line.compensate_radiation_energy_loss(delta0='zero_mean', co_search_at=CO_SEARCH_AT)
-    tw = line.twiss(method='6d', co_search_at=CO_SEARCH_AT, chrom=False,
+    co_guess = compensate_rf_phases(line)
+    tw = line.twiss(method='5d', zeta0=0., chrom=False, co_guess=co_guess,
                     steps_R_matrix=STEPS_R_MATRIX)
-    # Independent 6D closure test, with physical radiation and RF kicks enabled.
+    # Verify the five periodic coordinates; zeta is allowed to slip.
     co = tw.particle_on_co.copy()
     keys = ('x', 'px', 'y', 'py', 'zeta', 'delta')
     before = np.array([getattr(co, key)[0] for key in keys])
     line.track(co, num_turns=1)
     after = np.array([getattr(co, key)[0] for key in keys])
-    if co.state[0] <= 0 or np.any(np.abs(after-before) >
-                                 np.array([1e-7, 1e-8, 1e-7, 1e-8, 1e-6, 1e-8])):
-        raise ValueError(f'6D closed orbit does not close: {after-before}')
+    active = [0, 1, 2, 3, 5]
+    if co.state[0] <= 0 or np.any(np.abs(after-before)[active] >
+                                 np.array([1e-7, 1e-8, 1e-7, 1e-8, 1e-8])):
+        raise ValueError(f'5D closed orbit does not close: {after-before}')
     tt = line.get_table()
-    info = dict(amplitude_detuning=detuning, tunes=[float(tw.qx), float(tw.qy), float(tw.qs)],
+    info = dict(method='5d', periodic_coordinates=['x', 'px', 'y', 'py', 'delta'],
+                amplitude_detuning=detuning, tunes=[float(tw.qx), float(tw.qy), float(tw.qs)],
                 arc_dipole_b4_switch_before=b4_before,
                 arc_dipole_b4_switch=float(line['on_error_arc_dipole_b4']),
                 closed_orbit=before.tolist(), closure_error=(after-before).tolist(),
@@ -166,7 +160,7 @@ def prepare_machine(clean):
                 aperture_elements=tt.name[np.char.startswith(
                     np.asarray(tt.element_type, dtype=str), 'Limit')].tolist(),
                 global_xy_limit=float(line.config.XTRACK_GLOBAL_XY_LIMIT))
-    print(('Clean' if clean else 'Corrected'), '6D optics:', info, flush=True)
+    print(('Clean' if clean else 'Corrected'), '5D optics:', info, flush=True)
     if TRACKING_THREADS:
         line.build_tracker(_context=xo.ContextCpu(omp_num_threads=TRACKING_THREADS))
     return line, tw, info
@@ -270,7 +264,7 @@ def plot_amplitude_detuning(machines):
                    ylabel='Detuning coefficient [10⁵ m⁻¹]', title=title, xticks=[1, 2, 3])
             ax.grid(alpha=.25)
     axes[0].legend()
-    fig.suptitle('Amplitude detuning at '+LAUNCH_AT+'; radiation/tapering off; cavity kicks off')
+    fig.suptitle('Amplitude detuning at '+LAUNCH_AT+'; radiation off; saved tapering; cavity kicks off')
     for suffix in ('png', 'pdf'):
         fig.savefig(OUTPUT_DIR / f'amplitude_detuning.{suffix}', dpi=180)
     if not SHOW_PLOTS:
@@ -284,18 +278,18 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     da, ma = launch_grids()
     count = len(da['x_norm']) + len(ma['x_norm'])
-    summary = dict(input=str(INPUT), input_sha256=hashlib.sha256(INPUT.read_bytes()).hexdigest(),
+    summary = dict(input=str(INPUT), clean_input=str(CLEAN_INPUT), input_sha256=hashlib.sha256(INPUT.read_bytes()).hexdigest(),
         launch_at=LAUNCH_AT, turns=NUM_TURNS, tracking_threads=TRACKING_THREADS,
         gemitt_x=GEMITT_X, gemitt_y=GEMITT_Y,
         suppress_arc_dipole_b4=SUPPRESS_ARC_DIPOLE_B4,
         amplitude_detuning_settings=dict(enabled=CHECK_AMPLITUDE_DETUNING,
             turns=DETUNING_TURNS, amplitudes=DETUNING_AMPLITUDES.tolist(),
-            radiation=False, tapering=False, rf='XS_FLAG_KILL_CAVITY_KICK',
+            radiation=False, tapering='saved settings', rf='XS_FLAG_KILL_CAVITY_KICK',
             definition='dQ_i/dJ_j; vary each action separately, other mode at 0.5 sigma'),
         correction_settings='saved values; no re-correction',
-        radiation_model=RADIATION_MODEL, tapering='independent zero-mean-energy tapering',
+        radiation_model=RADIATION_MODEL, tapering='saved magnet settings; phase-only compensation', optics_method='5d',
         longitudinal_launch='zeta=closed orbit; delta=closed orbit + requested offset',
-        transverse_launch='each machine 6D W matrix, identical geometric emittances',
+        transverse_launch='each machine full W matrix from 5D Twiss, identical geometric emittances',
         ma_definition='initial-delta versus equal-amplitude survival; same phase in both modes',
         da_radii=DA_RADII.tolist(), da_angles=DA_ANGLES.tolist(),
         ma_deltas=MA_DELTAS.tolist(), ma_amplitudes=MA_AMPLITUDES.tolist(),
