@@ -1,7 +1,8 @@
 """Team-style DA and amplitude-versus-initial-delta survival maps at the septum.
 
-6D tracking from 5D optics, active RF and saved magnet tapering for clean/corrected
-machines, followed by the selected radiation model. No correction is run.
+The default uses 4D optics with radiation and RF kicks disabled. The commented
+5D settings enable 6D tracking with active RF, saved magnet tapering and the
+selected radiation model for clean/corrected machines. No correction is run.
 MA here is a survival map, not a local Touschek momentum acceptance or lifetime.
 Run in IPython with %matplotlib followed by %run 004_da_ma_6d.py.
 """
@@ -18,24 +19,24 @@ from twiss_settings import compensate_rf_phases
 from correction_workflow import prepare_reference
 
 HERE = Path(__file__).resolve().parent
-INPUT = HERE / 'response_api_class' / 'machine.json'
-CLEAN_INPUT = HERE / 'fccee_z_lcc_tapered.json'
+INPUT = HERE / 'response_api_class_4d' / 'machine.json'
+CLEAN_INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
 SUPPRESS_ARC_DIPOLE_B4 = False       # Installed systematic + random b4 errors only.
-OUTPUT_DIR = HERE / 'analysis' / ('da_ma_6d_b4_off' if SUPPRESS_ARC_DIPOLE_B4 else 'da_ma_6d')
+OUTPUT_DIR = HERE / 'analysis' / ('da_ma_4d_b4_off' if SUPPRESS_ARC_DIPOLE_B4 else 'da_ma_4d')
 LAUNCH_AT = 'septum'
 NUM_TURNS = 300                    # Preliminary comparison; team benchmark: 2500.
 TRACKING_THREADS = 8               # BLAS can stay single-threaded.
 GEMITT_X = 0.71e-9                 # Geometric emittances [m].
 GEMITT_Y = 1.4e-12
-TWISS_METHOD = '5d'
-RADIATION_MODEL = 'mean'            # Choose 'mean' or 'quantum' for tracking.
+TWISS_METHOD = '4d'
+RADIATION_MODEL = None            # RF kicks are disabled for this workflow.
 
-# Uncomment this block after running 002 with its radiation-free settings.
-# INPUT = HERE / 'response_api_class_4d' / 'machine.json'
-# CLEAN_INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
-# OUTPUT_DIR = HERE / 'analysis' / ('da_ma_4d_b4_off' if SUPPRESS_ARC_DIPOLE_B4 else 'da_ma_4d')
-# TWISS_METHOD = '4d'
-# RADIATION_MODEL = None            # RF kicks are disabled for this workflow.
+# Uncomment this block after running 002 with its 5D radiation settings.
+# INPUT = HERE / 'response_api_class' / 'machine.json'
+# CLEAN_INPUT = HERE / 'fccee_z_lcc_tapered.json'
+# OUTPUT_DIR = HERE / 'analysis' / ('da_ma_6d_b4_off' if SUPPRESS_ARC_DIPOLE_B4 else 'da_ma_6d')
+# TWISS_METHOD = '5d'
+# RADIATION_MODEL = 'mean'            # Choose 'mean' or 'quantum' for tracking.
 
 DA_RADII = np.linspace(0., 20., 11)
 DA_ANGLES = np.linspace(0., 2*np.pi, 16, endpoint=False)

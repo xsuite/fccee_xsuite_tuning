@@ -19,18 +19,18 @@ from correction_workflow import prepare_reference
 
 # Scan offsets from each machine's nominal starting delta, with RF phases fixed.
 HERE = Path(__file__).resolve().parent
-INPUT = HERE / 'response_api_class' / 'machine.json'
-CLEAN_INPUT = HERE / 'fccee_z_lcc_tapered.json'
-OUTPUT_DIR = HERE / 'analysis' / 'momentum_scan'
-TWISS_METHOD = '5d'
-RADIATION_MODEL = 'mean'
+INPUT = HERE / 'response_api_class_4d' / 'machine.json'
+CLEAN_INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
+OUTPUT_DIR = HERE / 'analysis' / 'momentum_scan_4d'
+TWISS_METHOD = '4d'
+RADIATION_MODEL = None
 
-# Uncomment this block after running 002 with its radiation-free settings.
-# INPUT = HERE / 'response_api_class_4d' / 'machine.json'
-# CLEAN_INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
-# OUTPUT_DIR = HERE / 'analysis' / 'momentum_scan_4d'
-# TWISS_METHOD = '4d'
-# RADIATION_MODEL = None
+# Uncomment this block after running 002 with its 5D radiation settings.
+# INPUT = HERE / 'response_api_class' / 'machine.json'
+# CLEAN_INPUT = HERE / 'fccee_z_lcc_tapered.json'
+# OUTPUT_DIR = HERE / 'analysis' / 'momentum_scan'
+# TWISS_METHOD = '5d'
+# RADIATION_MODEL = 'mean'
 
 DELTA_MAX = 0.01
 NUM_POINTS = 21                     # Odd, so zero is included; spacing 0.001.

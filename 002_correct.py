@@ -22,16 +22,16 @@ from corr_second_order_chrom import DEFAULT_SECOND_ORDER_CHROM_SETTINGS
 
 # Settings
 HERE = Path(__file__).resolve().parent
-INPUT = HERE / 'fccee_z_lcc_tapered.json'
-OUTPUT_DIR = HERE / 'response_api_class'
-TWISS_METHOD = '5d'
-RADIATION_MODEL = 'mean'
+INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
+OUTPUT_DIR = HERE / 'response_api_class_4d'
+TWISS_METHOD = '4d'
+RADIATION_MODEL = None
 
-# Uncomment this block for the untapered, radiation-free workflow (skip 001b).
-# INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
-# OUTPUT_DIR = HERE / 'response_api_class_4d'
-# TWISS_METHOD = '4d'
-# RADIATION_MODEL = None
+# Uncomment this block for 5D with radiation after running 001b.
+# INPUT = HERE / 'fccee_z_lcc_tapered.json'
+# OUTPUT_DIR = HERE / 'response_api_class'
+# TWISS_METHOD = '5d'
+# RADIATION_MODEL = 'mean'
 
 TARGET_ERROR_FRACTION = 1.0
 INITIAL_INCREMENT = 0.0125
