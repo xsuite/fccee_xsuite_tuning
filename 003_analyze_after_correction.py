@@ -27,7 +27,6 @@ SHOW_PLOTS = True                   # Set False for batch runs.
 MAX_CONTINUATION_STEP = 5e-4
 MIN_CONTINUATION_STEP = 1e-6
 MAX_TUNE_STEP = 0.25                # Reject ambiguous/discontinuous mode branches.
-START_AT = 'ipd'
 IPS = ['ipa', 'ipd', 'ipg', 'ipj']
 STEPS_R_MATRIX = dict(dx=1e-8, dpx=1e-9, dy=1e-8, dpy=1e-9,
                       dzeta=1e-7, ddelta=1e-8)
@@ -101,13 +100,13 @@ def main():
     line = xt.load(INPUT, with_progress=False)
     settings = dict(method='5d', chrom=False, steps_R_matrix=STEPS_R_MATRIX)
     def prepare(machine):
-        machine.cycle(name_first_element=START_AT, inplace=True)
         machine.configure_radiation(model='mean')
         co_guess = compensate_rf_phases(machine)
         return machine.twiss(zeta0=0., co_guess=co_guess, **settings)
     tw0 = prepare(line)
     clean_line = xt.load(CLEAN_INPUT, with_progress=False)
     reference = prepare(clean_line)
+    np.testing.assert_array_equal(tw0.name, reference.name)
     circuits = line.metadata['correction_knobs']
     names = list(dict.fromkeys(circuits['orbit']['x']['monitors'] + IPS))
     indices = tw0.rows.indices[names]
@@ -117,7 +116,6 @@ def main():
     deltas[zero] = 0.
     clean_data, clean_tunes, clean_errors, clean_reached_delta = scan_momentum(
         clean_line, reference, deltas, indices, settings, 'Clean')
-    np.testing.assert_array_equal(tw0.name, reference.name)
     data, tunes, errors, reached_delta = scan_momentum(
         line, tw0, deltas, indices, settings, 'Corrected')
 
@@ -134,7 +132,7 @@ def main():
                         **{'clean_' + key: value for key, value in clean_data.items()})
     summary = dict(input=str(INPUT.resolve()), clean_input=str(CLEAN_INPUT.resolve()),
                    radiation='mean', tapering='saved settings',
-                   method='5d', start_at=START_AT,
+                   method='5d', start_at=line.element_names[0],
                    delta_definition='offset from each machine starting momentum',
                    observation_points='BPM entrances plus ipa/ipd/ipg/ipj',
                    orbit_coordinates='lattice frame [m], no BPM alignment subtraction',
