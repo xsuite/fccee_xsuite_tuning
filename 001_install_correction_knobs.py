@@ -43,6 +43,7 @@ install_nonlinear_switch(line)
 
 # Install independent correction circuits on the lattice with errors.
 corr_orbit.install_orbit_knobs(line)
+corr_orbit.install_tapering_orbit_knobs(line)
 corr_optics.install_optics_knobs(line)
 corr_coupling.install_coupling_knobs(line)
 corr_tune.install_tune_knobs(line, families=TUNE_KNOBS)

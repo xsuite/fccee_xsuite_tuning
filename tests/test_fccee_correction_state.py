@@ -77,6 +77,8 @@ def correction(monkeypatch):
     )
     state.compute_metrics = lambda tw, **kwargs: metrics
     yield state
+    # Restore patched instance attributes before releasing the instance state.
+    monkeypatch.undo()
     state.__dict__.clear()
 
 

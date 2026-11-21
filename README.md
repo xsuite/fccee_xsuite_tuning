@@ -41,6 +41,7 @@ Input and output paths are resolved relative to the scripts.
 | --- | --- | --- |
 | 000 | [`000_install_errors.py`](000_install_errors.py) | Installs alignment, field, and BPM errors; writes `fccee_z_lcc_errors.json`. |
 | 001 | [`001_install_correction_knobs.py`](001_install_correction_knobs.py) | Installs correction circuits and records their metadata; writes `fccee_z_lcc_correction_knobs.json`. |
+| 001b | [`001b_prepare_tapering.py`](001b_prepare_tapering.py) | Prepares the clean radiating machine with common arc-bend taper settings and dedicated orbit trims; writes `fccee_z_lcc_tapered.json`. |
 | 002 | [`002_correct.py`](002_correct.py) | Prepares the clean reference, builds optimizers, ramps errors, and performs iterative corrections and final refinement. 
 
 
@@ -55,6 +56,31 @@ strengths and chromatic quantities enabled. Correction uses radiation and
 tapering off. Both chromatic corrections are skipped during the error ramp and
 applied during refinement, first order before second order. All correction
 goals are rechecked after changes.
+
+### Prepare tapering with arc bends powered in series
+
+`001b` uses the 5D Twiss and phase-only compensation functionality developed on
+Xtrack's `dev/tapering` branch. It starts with errors off, zero correction trims,
+and nominal nonlinear strengths. After ideal tapering of all magnets, it assigns
+each arc's bends their length-weighted average `delta_taper`, including dispersion
+suppressors. Other magnets keep their ideal taper settings.
+
+The script alternates RF phase compensation at zero mean momentum with 5D orbit
+correction. It uses dedicated `tapering_orbit_corr_*` knobs on the existing
+correctors. Set `line['on_tapering_orbit_corr'] = 0` or `1` to disable or enable
+these kicks independently of the ordinary `on_orbit_corr` circuit. Changing this
+switch does not change RF phases or magnet taper settings.
+
+The full change to common arc settings is attempted first. Failed trials restore
+RF phases, bend tapers and tapering orbit trims, then retry with a smaller step
+between ideal and common tapering. `INITIAL_INCREMENT`, `MIN_INCREMENT` and
+`MAX_ITERATIONS` are exposed in the script. Existing files from `001` without the
+dedicated circuit are supported; `001b` installs it when needed.
+
+This preparation can be run independently. `002` still uses its original
+radiation-free input and 4D correction workflow; consuming the prepared radiating
+machine throughout optics/coupling correction is a subsequent extension. The
+ordinary correction circuit does not include or scale the dedicated tapering trims.
 
 ## Analyze the corrected machine
 
@@ -87,6 +113,7 @@ default. For interactive plotting, start IPython and run:
 | [`correction_workflow.py`](correction_workflow.py) | Clean reference preparation, correction sequencing, error ramp, accepted state, and rollback. |
 | [`correction_optimizer.py`](correction_optimizer.py) | Shared optimizer interface with module-specific metrics and goals. |
 | `corr_orbit.py`, `corr_optics.py`, `corr_coupling.py` | Orbit, normal optics/dispersion, and coupling/vertical-dispersion correction. |
+| [`tapering_workflow.py`](tapering_workflow.py) | Common arc-bend taper settings, 5D orbit correction, and rollback of tapering trials. |
 | `corr_tune.py`, `corr_chromaticity.py`, `corr_second_order_chrom.py` | Tune and chromatic corrections. |
 | [`response_builders.py`](response_builders.py) | Analytical orbit, normal-quadrupole, and skew-quadrupole responses. |
 | [`tests/`](tests/) | Focused installation, response, workflow, and analysis checks. |

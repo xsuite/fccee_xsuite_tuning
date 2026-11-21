@@ -16,13 +16,14 @@ DEFAULT_ORBIT_CORR_SETTINGS = SimpleNamespace(
 )
 
 
-def build_orbit_corr_optimizer(line, reference, *, plane, settings=None, **twiss_kwargs):
+def build_orbit_corr_optimizer(line, reference, *, plane, settings=None,
+                               circuit='orbit', method='4d', **twiss_kwargs):
     """Build a correction optimizer with local targets, response and diagnostics."""
     if plane not in ('x', 'y'):
         raise ValueError('Orbit plane must be x or y')
     if settings is None:
         settings = copy(DEFAULT_ORBIT_CORR_SETTINGS)
-    circuits = line.metadata['correction_knobs']['orbit']
+    circuits = line.metadata['correction_knobs'][circuit]
     alignment = line.metadata['tuning_errors']['bpm_alignment_variables']
     monitors = circuits[plane]['monitors']
     targets = []
@@ -36,9 +37,14 @@ def build_orbit_corr_optimizer(line, reference, *, plane, settings=None, **twiss
     vary = []
     for knob in circuits[plane]['knobs']:
         vary.append(xt.Vary(knob, step=1e-7))
+    if 'delta0' not in twiss_kwargs and 'zeta0' not in twiss_kwargs:
+        if method == '4d':
+            twiss_kwargs['delta0'] = 0.
+        elif method == '5d':
+            twiss_kwargs['zeta0'] = 0.
     optimizer = CorrectionOptimizer(
         line=line, reference_twiss=reference, settings=settings,
-        method='4d', delta0=0., chrom=False, radiation_integrals=False,
+        method=method, chrom=False, radiation_integrals=False,
         allow_twiss_failure=False,
         co_guess=dict(x=0, px=0, y=0, py=0, zeta=0, delta=0),
         **twiss_kwargs,
@@ -46,7 +52,7 @@ def build_orbit_corr_optimizer(line, reference, *, plane, settings=None, **twiss
         print_metrics=print_metrics,
         name=f'orbit {plane}', vary=vary, targets=targets)
     optimizer.plane = plane
-    optimizer.monitor_names = list(circuits['x']['monitors'])
+    optimizer.monitor_names = list(monitors)
     optimizer.monitor_indices = reference.rows.indices[optimizer.monitor_names]
     optimizer.alignment_variables = alignment
     optimizer.rcond = settings.rcond
@@ -88,31 +94,44 @@ def install_orbit_knobs(line):
         [n for n in line.element_names if n.startswith(prefix)]
         for prefix in ('hcor_', 'vcor_')
     ]
-    orbit_knobs = [f'orbit_corr_{name}_{plane}'
-                   for plane, names in zip('xy', corrector_names) for name in names]
-    assert all(knob not in line.vars for knob in orbit_knobs), 'Orbit correction knobs already exist'
-    line['on_orbit_corr'] = 1.0
-    for plane, names, field, sign in zip('xy', corrector_names, ('knl', 'ksl'), (-1, 1)):
-        for name in names:
-            knob = f'orbit_corr_{name}_{plane}'
-            line[knob] = 0.0
-            getattr(line.ref[name], field)[0] += (
-                sign * line.ref['on_orbit_corr'] * line.ref[knob]
-            )
+    orbit_knobs = _install_orbit_circuit(
+        line, 'orbit', 'orbit_corr', 'on_orbit_corr', corrector_names, monitor_names)
     line.steering_monitors_x = line.steering_monitors_y = monitor_names
     line.steering_correctors_x, line.steering_correctors_y = corrector_names
     print('BPMs:', len(monitor_names), 'H/V correctors:', [len(n) for n in corrector_names])
 
     circuits = line.metadata.setdefault('correction_knobs', {})
-    circuits['orbit'] = {
-        plane: dict(
-            knobs=[f'orbit_corr_{name}_{plane}' for name in names],
-            correctors=names, monitors=monitor_names, units='rad')
-        for plane, names in zip('xy', corrector_names)
-    }
-    circuits.setdefault('switches', {})['orbit'] = 'on_orbit_corr'
     circuits['added_correctors'] = added_correctors
     return orbit_knobs
+
+
+def install_tapering_orbit_knobs(line):
+    """Add independent tapering trims to the existing orbit correctors."""
+    circuits = line.metadata['correction_knobs']['orbit']
+    return _install_orbit_circuit(
+        line, 'tapering_orbit', 'tapering_orbit_corr', 'on_tapering_orbit_corr',
+        [circuits[plane]['correctors'] for plane in 'xy'],
+        circuits['x']['monitors'])
+
+
+def _install_orbit_circuit(line, circuit, prefix, switch, corrector_names, monitors):
+    circuits = line.metadata.setdefault('correction_knobs', {})
+    knobs = [f'{prefix}_{name}_{plane}'
+             for plane, names in zip('xy', corrector_names) for name in names]
+    if circuit in circuits or any(knob in line.vars for knob in knobs):
+        raise ValueError(f'{circuit} correction knobs already exist')
+    line[switch] = 1.
+    for plane, names, field, sign in zip('xy', corrector_names, ('knl', 'ksl'), (-1, 1)):
+        for name in names:
+            knob = f'{prefix}_{name}_{plane}'
+            line[knob] = 0.
+            getattr(line.ref[name], field)[0] += sign * line.ref[switch] * line.ref[knob]
+    circuits[circuit] = {
+        plane: dict(knobs=[f'{prefix}_{name}_{plane}' for name in names],
+                    correctors=list(names), monitors=list(monitors), units='rad')
+        for plane, names in zip('xy', corrector_names)}
+    circuits.setdefault('switches', {})[circuit] = switch
+    return knobs
 
 
 def monitor_alignment(optimizer):
