@@ -1,4 +1,4 @@
-"""Clean/corrected tunes versus delta and on-momentum beta comparison (5D).
+"""Clean/corrected tunes versus delta and on-momentum beta comparison.
 
 Clean and corrected machines are scanned on the same starting-momentum offset
 grid. Both beta beating curves use the clean prepared nominal lattice. RF phases
@@ -15,12 +15,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xtrack as xt
 from twiss_settings import compensate_rf_phases
+from correction_workflow import prepare_reference
 
 # Scan offsets from each machine's nominal starting delta, with RF phases fixed.
 HERE = Path(__file__).resolve().parent
 INPUT = HERE / 'response_api_class' / 'machine.json'
 CLEAN_INPUT = HERE / 'fccee_z_lcc_tapered.json'
 OUTPUT_DIR = HERE / 'analysis' / 'momentum_scan'
+TWISS_METHOD = '5d'
+RADIATION_MODEL = 'mean'
+
+# Uncomment this block after running 002 with its radiation-free settings.
+# INPUT = HERE / 'response_api_class_4d' / 'machine.json'
+# CLEAN_INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
+# OUTPUT_DIR = HERE / 'analysis' / 'momentum_scan_4d'
+# TWISS_METHOD = '4d'
+# RADIATION_MODEL = None
+
 DELTA_MAX = 0.01
 NUM_POINTS = 21                     # Odd, so zero is included; spacing 0.001.
 SHOW_PLOTS = True                   # Set False for batch runs.
@@ -98,14 +109,19 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print('Loading', INPUT, flush=True)
     line = xt.load(INPUT, with_progress=False)
-    settings = dict(method='5d', chrom=False, steps_R_matrix=STEPS_R_MATRIX)
-    def prepare(machine):
-        machine.configure_radiation(model='mean')
+    settings = dict(method=TWISS_METHOD, chrom=False, steps_R_matrix=STEPS_R_MATRIX)
+    def prepare(machine, clean=False):
+        machine.configure_radiation(model=RADIATION_MODEL)
+        if TWISS_METHOD == '4d':
+            if clean:
+                return prepare_reference(machine, method='4d', steps_R_matrix=STEPS_R_MATRIX)
+            co_guess = machine.metadata.get('orbit_guesses', {}).get(machine.element_names[0])
+            return machine.twiss(delta0=0., co_guess=co_guess, **settings)
         co_guess = compensate_rf_phases(machine)
         return machine.twiss(zeta0=0., co_guess=co_guess, **settings)
     tw0 = prepare(line)
     clean_line = xt.load(CLEAN_INPUT, with_progress=False)
-    reference = prepare(clean_line)
+    reference = prepare(clean_line, clean=True)
     np.testing.assert_array_equal(tw0.name, reference.name)
     circuits = line.metadata['correction_knobs']
     names = list(dict.fromkeys(circuits['orbit']['x']['monitors'] + IPS))
@@ -131,8 +147,9 @@ def main():
                         clean_reached_delta=clean_reached_delta,
                         **{'clean_' + key: value for key, value in clean_data.items()})
     summary = dict(input=str(INPUT.resolve()), clean_input=str(CLEAN_INPUT.resolve()),
-                   radiation='mean', tapering='saved settings',
-                   method='5d', start_at=line.element_names[0],
+                   radiation=RADIATION_MODEL,
+                   tapering='saved settings' if TWISS_METHOD == '5d' else 'off',
+                   method=TWISS_METHOD, start_at=line.element_names[0],
                    delta_definition='offset from each machine starting momentum',
                    observation_points='BPM entrances plus ipa/ipd/ipg/ipj',
                    orbit_coordinates='lattice frame [m], no BPM alignment subtraction',
@@ -163,7 +180,7 @@ def main():
         ax.set_xlim(-100 * DELTA_MAX, 100 * DELTA_MAX)
         ax.grid(alpha=0.25)
         ax.legend()
-    fig.suptitle('Tunes versus δ; mean radiation; saved tapering\n'
+    fig.suptitle(f'Tunes versus δ; {TWISS_METHOD}; radiation={RADIATION_MODEL}\n'
                  'Blue/orange vertical lines: corrected/clean failed or unreached')
     fig.savefig(OUTPUT_DIR / 'tunes_vs_delta.png', dpi=180)
     if not SHOW_PLOTS:
@@ -186,7 +203,7 @@ def main():
         axes[0, jj].legend()
     for ax in axes.flat:
         ax.grid(alpha=0.25)
-    fig.suptitle('On-momentum beta at BPM entrances + four IPs; mean radiation; saved tapering')
+    fig.suptitle(f'On-momentum beta at BPM entrances + four IPs; {TWISS_METHOD}; radiation={RADIATION_MODEL}')
     fig.savefig(OUTPUT_DIR / 'beta_along_ring.png', dpi=180)
     if not SHOW_PLOTS:
         plt.close(fig)

@@ -24,6 +24,15 @@ from corr_second_order_chrom import DEFAULT_SECOND_ORDER_CHROM_SETTINGS
 HERE = Path(__file__).resolve().parent
 INPUT = HERE / 'fccee_z_lcc_tapered.json'
 OUTPUT_DIR = HERE / 'response_api_class'
+TWISS_METHOD = '5d'
+RADIATION_MODEL = 'mean'
+
+# Uncomment this block for the untapered, radiation-free workflow (skip 001b).
+# INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
+# OUTPUT_DIR = HERE / 'response_api_class_4d'
+# TWISS_METHOD = '4d'
+# RADIATION_MODEL = None
+
 TARGET_ERROR_FRACTION = 1.0
 INITIAL_INCREMENT = 0.0125
 MIN_INCREMENT = 1e-5
@@ -43,13 +52,14 @@ optimizer_settings = dict(
 # Prepare the clean reference; inspect reference_twiss before building optimizers.
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 line = xt.load(INPUT)
+line.configure_radiation(model=RADIATION_MODEL)
 reference_twiss = prepare_reference(
-    line, method='5d', delta_chrom=optimizer_settings['second_order_chrom'].delta_chrom,
+    line, method=TWISS_METHOD, delta_chrom=optimizer_settings['second_order_chrom'].delta_chrom,
     steps_R_matrix=STEPS_R_MATRIX)
 
 # Build the optimizers from the shared reference.
 correction = FCCeeCorrection(
-    line=line, reference_twiss=reference_twiss, method='5d',
+    line=line, reference_twiss=reference_twiss, method=TWISS_METHOD,
     intermediate_max_iterations=5, final_max_iterations=40,
     optimizer_settings=optimizer_settings, steps_R_matrix=STEPS_R_MATRIX)
 

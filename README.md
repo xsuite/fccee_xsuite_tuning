@@ -89,6 +89,13 @@ trims. `002` ramps errors and ordinary correction knobs from this prepared state
 magnet taper values stay fixed. The correction modules still support explicit 4D
 settings for radiation-free studies and tests.
 
+To run the untapered, radiation-free workflow, uncomment the configuration block
+near the top of each of `002`, `003` and `004`, and skip `001b`. These blocks select
+`TWISS_METHOD='4d'`, `RADIATION_MODEL=None` and the original correction-knob input.
+The corrected machine is saved in `response_api_class_4d`; analysis uses separate
+`*_4d` output directories. In `004`, RF kicks are disabled so momentum stays
+constant during radiation-free tracking. The active defaults remain 5D with radiation.
+
 ## Analyze the corrected machine
 
 Analysis scripts load `response_api_class/machine.json` and compare it with the

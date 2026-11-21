@@ -15,6 +15,7 @@ import numpy as np
 import xtrack as xt
 import xobjects as xo
 from twiss_settings import compensate_rf_phases
+from correction_workflow import prepare_reference
 
 HERE = Path(__file__).resolve().parent
 INPUT = HERE / 'response_api_class' / 'machine.json'
@@ -26,7 +27,16 @@ NUM_TURNS = 300                    # Preliminary comparison; team benchmark: 250
 TRACKING_THREADS = 8               # BLAS can stay single-threaded.
 GEMITT_X = 0.71e-9                 # Geometric emittances [m].
 GEMITT_Y = 1.4e-12
-RADIATION_MODEL = 'mean'          # Choose 'mean' or 'quantum' for tracking.
+TWISS_METHOD = '5d'
+RADIATION_MODEL = 'mean'            # Choose 'mean' or 'quantum' for tracking.
+
+# Uncomment this block after running 002 with its radiation-free settings.
+# INPUT = HERE / 'response_api_class_4d' / 'machine.json'
+# CLEAN_INPUT = HERE / 'fccee_z_lcc_correction_knobs.json'
+# OUTPUT_DIR = HERE / 'analysis' / ('da_ma_4d_b4_off' if SUPPRESS_ARC_DIPOLE_B4 else 'da_ma_4d')
+# TWISS_METHOD = '4d'
+# RADIATION_MODEL = None            # RF kicks are disabled for this workflow.
+
 DA_RADII = np.linspace(0., 20., 11)
 DA_ANGLES = np.linspace(0., 2*np.pi, 16, endpoint=False)
 MA_DELTAS = np.linspace(-0.012, 0.012, 13)
@@ -120,6 +130,8 @@ def prepare_machine(clean):
         # This switch multiplies both systematic and random arc-dipole b4 errors.
         line['on_error_arc_dipole_b4'] = 0.
     line.cycle(name_first_element=LAUNCH_AT, inplace=True)
+    if clean and TWISS_METHOD == '4d':
+        tw_clean = prepare_reference(line, method='4d', steps_R_matrix=STEPS_R_MATRIX)
     detuning = None
     if CHECK_AMPLITUDE_DETUNING:
         label = 'clean' if clean else 'corrected'
@@ -134,12 +146,21 @@ def prepare_machine(clean):
         detuning = track_amplitude_detuning(line, tw4d, DETUNING_TURNS, label)
         # Radiation Twiss requires a serial context; restore parallelism below.
         line.build_tracker(_context=xo.ContextCpu())
-    line.configure_radiation(model='mean')
-    line.tracker.track_flags.XS_FLAG_KILL_CAVITY_KICK = False
-    # Keep the mean reference energy fixed, sharing the loss among active RF.
-    co_guess = compensate_rf_phases(line)
-    tw = line.twiss(method='5d', zeta0=0., chrom=False, co_guess=co_guess,
-                    steps_R_matrix=STEPS_R_MATRIX)
+    if TWISS_METHOD == '4d':
+        if clean:
+            tw = tw_clean
+        else:
+            co_guess = line.metadata.get('orbit_guesses', {}).get(line.element_names[0])
+            tw = line.twiss(method='4d', delta0=0., co_guess=co_guess,
+                            chrom=False, steps_R_matrix=STEPS_R_MATRIX)
+        line.tracker.track_flags.XS_FLAG_KILL_CAVITY_KICK = True
+    else:
+        line.configure_radiation(model='mean')
+        line.tracker.track_flags.XS_FLAG_KILL_CAVITY_KICK = False
+        # Keep the mean reference energy fixed, sharing the loss among active RF.
+        co_guess = compensate_rf_phases(line)
+        tw = line.twiss(method=TWISS_METHOD, zeta0=0., chrom=False, co_guess=co_guess,
+                        steps_R_matrix=STEPS_R_MATRIX)
     # Verify the five periodic coordinates; zeta is allowed to slip.
     co = tw.particle_on_co.copy()
     keys = ('x', 'px', 'y', 'py', 'zeta', 'delta')
@@ -149,9 +170,9 @@ def prepare_machine(clean):
     active = [0, 1, 2, 3, 5]
     if co.state[0] <= 0 or np.any(np.abs(after-before)[active] >
                                  np.array([1e-7, 1e-8, 1e-7, 1e-8, 1e-8])):
-        raise ValueError(f'5D closed orbit does not close: {after-before}')
+        raise ValueError(f'{TWISS_METHOD} orbit does not close: {after-before}')
     tt = line.get_table()
-    info = dict(method='5d', periodic_coordinates=['x', 'px', 'y', 'py', 'delta'],
+    info = dict(method=TWISS_METHOD, periodic_coordinates=['x', 'px', 'y', 'py', 'delta'],
                 amplitude_detuning=detuning, tunes=[float(tw.qx), float(tw.qy), float(tw.qs)],
                 arc_dipole_b4_switch_before=b4_before,
                 arc_dipole_b4_switch=float(line['on_error_arc_dipole_b4']),
@@ -160,9 +181,10 @@ def prepare_machine(clean):
                 aperture_elements=tt.name[np.char.startswith(
                     np.asarray(tt.element_type, dtype=str), 'Limit')].tolist(),
                 global_xy_limit=float(line.config.XTRACK_GLOBAL_XY_LIMIT))
-    print(('Clean' if clean else 'Corrected'), '5D optics:', info, flush=True)
+    print(('Clean' if clean else 'Corrected'), f'{TWISS_METHOD} optics:', info, flush=True)
     if TRACKING_THREADS:
         line.build_tracker(_context=xo.ContextCpu(omp_num_threads=TRACKING_THREADS))
+    line.tracker.track_flags.XS_FLAG_KILL_CAVITY_KICK = TWISS_METHOD == '4d'
     return line, tw, info
 
 
@@ -241,7 +263,7 @@ def plot_results(results):
             ax.grid(alpha=.15)
             fig.colorbar(color, ax=ax, label=('Completed turns' if scan == 'da'
                          else 'Mean completed turns over four phases per sign'))
-        fig.suptitle(f'{scan.upper()} at {LAUNCH_AT}; 6D RF + tapering; {NUM_TURNS} turns\n'
+        fig.suptitle(f'{scan.upper()} at {LAUNCH_AT}; {TWISS_METHOD}; radiation={RADIATION_MODEL}; {NUM_TURNS} turns\n'
                      + ('Initial Δδ = 0; normalized momenta = 0' if scan == 'da' else
                         'Eight phase directions across both signs; white: all-phase survival boundary'))
         fig.savefig(OUTPUT_DIR / f'{scan}_comparison.png', dpi=180)
@@ -272,8 +294,10 @@ def plot_amplitude_detuning(machines):
 
 
 def main():
-    if RADIATION_MODEL not in ('mean', 'quantum'):
-        raise ValueError("RADIATION_MODEL must be 'mean' or 'quantum'")
+    if ((TWISS_METHOD == '4d' and RADIATION_MODEL is not None)
+            or (TWISS_METHOD == '5d' and RADIATION_MODEL not in ('mean', 'quantum'))
+            or TWISS_METHOD not in ('4d', '5d')):
+        raise ValueError('Use 4d with radiation=None, or 5d with mean/quantum radiation')
     started = perf_counter()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     da, ma = launch_grids()
@@ -287,9 +311,9 @@ def main():
             radiation=False, tapering='saved settings', rf='XS_FLAG_KILL_CAVITY_KICK',
             definition='dQ_i/dJ_j; vary each action separately, other mode at 0.5 sigma'),
         correction_settings='saved values; no re-correction',
-        radiation_model=RADIATION_MODEL, tapering='saved magnet settings; phase-only compensation', optics_method='5d',
+        radiation_model=RADIATION_MODEL, tapering='saved magnet settings; phase-only compensation' if TWISS_METHOD == '5d' else 'off', optics_method=TWISS_METHOD,
         longitudinal_launch='zeta=closed orbit; delta=closed orbit + requested offset',
-        transverse_launch='each machine full W matrix from 5D Twiss, identical geometric emittances',
+        transverse_launch=f'each machine W matrix from {TWISS_METHOD} Twiss, identical geometric emittances',
         ma_definition='initial-delta versus equal-amplitude survival; same phase in both modes',
         da_radii=DA_RADII.tolist(), da_angles=DA_ANGLES.tolist(),
         ma_deltas=MA_DELTAS.tolist(), ma_amplitudes=MA_AMPLITUDES.tolist(),
